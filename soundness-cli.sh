@@ -93,11 +93,22 @@ install_docker_cli() {
         rm -rf target
     fi
 
-    # 确保目录权限
-    chmod -R 755 .
-    if [ -f "key_store.json" ]; then
-        chmod 666 key_store.json
+    # 自动修改 docker-compose.yml 以添加 user: root
+    if [ -f "docker-compose.yml" ]; then
+        echo "检查并修改 docker-compose.yml 以添加 user: root..."
+        if ! grep -q "user: root" docker-compose.yml; then
+            # 备份原始文件
+            cp docker-compose.yml docker-compose.yml.bak
+            # 在 services.soundness-cli 下添加 user: root
+            awk '/services:/{print; print "  soundness-cli:"; next} /soundness-cli:/{print; print "    user: root"; next} {print}' docker-compose.yml.bak > docker-compose.yml
+            echo "docker-compose.yml 已更新，添加 user: root。"
+        else
+            echo "docker-compose.yml 已包含 user: root，无需修改。"
+        fi
     fi
+
+    # 确保目录权限
+    chmod -R 777 .
 
     # 拉取并构建 Soundness CLI Docker 镜像
     echo "构建 Soundness CLI Docker 镜像..."
@@ -113,11 +124,7 @@ generate_key_pair() {
         exit 1
     fi
     echo "正在生成新的密钥对：$key_name..."
-    if [ ! -f "key_store.json" ]; then
-        echo "未找到 key_store.json，创建空文件..."
-        touch key_store.json
-        chmod 666 key_store.json
-    fi
+    chmod -R 777 .
     docker-compose run --rm soundness-cli generate-key --name "$key_name"
 }
 
@@ -136,11 +143,7 @@ import_key_pair() {
         exit 1
     fi
     echo "正在导入密钥对：$key_name..."
-    if [ ! -f "key_store.json" ]; then
-        echo "未找到 key_store.json，创建空文件..."
-        touch key_store.json
-        chmod 666 key_store.json
-    fi
+    chmod -R 777 .
     docker-compose run --rm soundness-cli import-key --name "$key_name" --mnemonic "$mnemonic"
 }
 
