@@ -93,6 +93,12 @@ install_docker_cli() {
         rm -rf target
     fi
 
+    # 确保目录权限
+    chmod -R 755 .
+    if [ -f "key_store.json" ]; then
+        chmod 666 key_store.json
+    fi
+
     # 拉取并构建 Soundness CLI Docker 镜像
     echo "构建 Soundness CLI Docker 镜像..."
     docker-compose build
@@ -110,7 +116,7 @@ generate_key_pair() {
     if [ ! -f "key_store.json" ]; then
         echo "未找到 key_store.json，创建空文件..."
         touch key_store.json
-        chmod 600 key_store.json
+        chmod 666 key_store.json
     fi
     docker-compose run --rm soundness-cli generate-key --name "$key_name"
 }
@@ -133,7 +139,7 @@ import_key_pair() {
     if [ ! -f "key_store.json" ]; then
         echo "未找到 key_store.json，创建空文件..."
         touch key_store.json
-        chmod 600 key_store.json
+        chmod 666 key_store.json
     fi
     docker-compose run --rm soundness-cli import-key --name "$key_name" --mnemonic "$mnemonic"
 }
