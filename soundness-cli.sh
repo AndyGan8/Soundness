@@ -16,7 +16,6 @@ check_requirements() {
     if ! command -v docker &> /dev/null; then
         echo "警告：Docker 未安装。选择 Docker 安装选项时将自动安装。"
     else
-        # 检查 Docker 服务是否运行
         if ! systemctl is-active --quiet docker; then
             echo "错误：Docker 服务未运行。尝试启动..."
             sudo systemctl start docker
@@ -25,6 +24,10 @@ check_requirements() {
                 exit 1
             fi
         fi
+    fi
+    if ! command -v git &> /dev/null; then
+        echo "安装 git..."
+        sudo apt-get update && sudo apt-get install -y git
     fi
 }
 
@@ -38,7 +41,6 @@ install_docker_cli() {
         curl -fsSL https://get.docker.com -o get-docker.sh
         sh get-docker.sh
         rm get-docker.sh
-        # 启动 Docker 服务
         sudo systemctl start docker
         sudo systemctl enable docker
         echo "Docker 安装完成。"
@@ -52,23 +54,21 @@ install_docker_cli() {
         echo "docker-compose 安装完成。"
     fi
 
-    # 检查并下载 docker-compose.yml 和 Dockerfile
-    echo "检查 docker-compose.yml 和 Dockerfile..."
-    if [ ! -f "docker-compose.yml" ]; then
-        echo "未找到 docker-compose.yml，自动下载..."
-        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/docker-compose.yml
+    # 检查并克隆 Soundness CLI 源代码
+    if [ ! -d "soundness-layer" ]; then
+        echo "未找到 Soundness CLI 源代码，克隆仓库..."
+        git clone https://github.com/SoundnessLabs/soundness-layer.git
         if [ $? -ne 0 ]; then
-            echo "错误：无法下载 docker-compose.yml 文件，请检查网络连接或仓库地址。"
+            echo "错误：无法克隆 Soundness CLI 仓库，请检查网络连接或仓库地址。"
             exit 1
         fi
     fi
-    if [ ! -f "Dockerfile" ]; then
-        echo "未找到 Dockerfile，自动下载..."
-        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/Dockerfile
-        if [ $? -ne 0 ]; then
-            echo "错误：无法下载 Dockerfile 文件，请检查网络连接或仓库地址。"
-            exit 1
-        fi
+    cd soundness-layer/soundness-cli
+
+    # 创建 .dockerignore 文件
+    if [ ! -f ".dockerignore" ]; then
+        echo "创建 .dockerignore 文件以优化构建上下文..."
+        echo -e "target/\n.git/\n*.log\n*.md\nsoundnessup/" > .dockerignore
     fi
 
     # 拉取并构建 Soundness CLI Docker 镜像
@@ -85,7 +85,6 @@ generate_key_pair() {
         exit 1
     fi
     echo "正在生成新的密钥对：$key_name..."
-    # 确保 key_store.json 存在
     if [ ! -f "key_store.json" ]; then
         echo "未找到 key_store.json，创建空文件..."
         touch key_store.json
@@ -103,7 +102,6 @@ import_key_pair() {
         exit 1
     fi
     echo "正在导入密钥对：$key_name..."
-    # 确保 key_store.json 存在
     if [ ! -f "key_store.json" ]; then
         echo "未找到 key_store.json，创建空文件..."
         touch key_store.json
