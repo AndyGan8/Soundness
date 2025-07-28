@@ -105,23 +105,25 @@ install_docker_cli() {
         else
             cp docker-compose.yml docker-compose.yml.tmp
         fi
-        # 移除重复的 soundness-cli 键
-        awk '/services:/{print; seen=0; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.tmp > docker-compose.yml
+        # 移除重复的 soundness-cli 键并规范化缩进
+        awk '/^version:/{print; next} /^services:/{print; seen=0; next} /^[[:space:]]*soundness-cli:/{if (!seen) {print; seen=1} else {skip=1; next}} skip&&/^[[:space:]]/{next} {skip=0; print}' docker-compose.yml.tmp > docker-compose.yml
         rm -f docker-compose.yml.tmp
         # 添加 user: root（如果尚未存在）
         if ! grep -q "user: root" docker-compose.yml; then
             echo "添加 user: root 到 docker-compose.yml..."
             cp docker-compose.yml docker-compose.yml.tmp
-            sed '/^  soundness-cli:/a \    user: root' docker-compose.yml.tmp > docker-compose.yml
+            sed -e '/^  soundness-cli:/a\    user: root' docker-compose.yml.tmp > docker-compose.yml
             rm -f docker-compose.yml.tmp
         else
             echo "docker-compose.yml 已包含 user: root，无需添加。"
         fi
-        # 验证 YAML 格式
-        if ! docker-compose -f docker-compose.yml config >/dev/null 2>&1; then
-            echo "错误：docker-compose.yml 格式无效，恢复备份..."
+        # 验证 YAML 格式并捕获错误
+        if ! error=$(docker-compose -f docker-compose.yml config 2>&1 >/dev/null); then
+            echo "错误：docker-compose.yml 格式无效："
+            echo "$error"
+            echo "恢复备份文件..."
             mv docker-compose.yml.bak docker-compose.yml
-            echo "请手动检查 docker-compose.yml 内容："
+            echo "当前 docker-compose.yml 内容："
             cat docker-compose.yml
             exit 1
         fi
@@ -193,43 +195,43 @@ list_key_pairs() {
 show_menu() {
     echo "=== Soundness CLI 一键脚本 ==="
     echo "请选择操作："
-    echo "1. 安装 Soundness CLI（通过 Docker）"
-    echo "2. 生成新的密钥对"
-    echo "3. 导入密钥对"
-    echo "4. 列出密钥对"
-    echo "5. 退出"
-    read -p "请输入选项 (1-5)： " choice
+    echo "1. 安装 Soundness CLI（通过 Docker）
+2. 生成新的密钥对
+3. 导入密钥对
+4. 列出密钥对
+5. 退出
+read -p "请输入选项 (1-5)： " choice
 }
 
 # 主逻辑
 main() {
-    check_requirements
-    while true; do
-        show_menu
-        case $choice in
-            1)
-                install_docker_cli
-                ;;
-            2)
-                generate_key_pair
-                ;;
-            3)
-                import_key_pair
-                ;;
-            4)
-                list_key_pairs
-                ;;
-            5)
-                echo "退出脚本。"
-                exit 0
-                ;;
-            *)
-                echo "无效选项，请输入 1-5。"
-                ;;
-        esac
-        echo ""
-        read -p "按 Enter 键返回菜单..."
-    done
+check_requirements
+while true; do
+show_menu
+case $choice in
+1)
+install_docker_cli
+;;
+2)
+generate_key_pair
+;;
+3)
+import_key_pair
+;;
+4)
+list_key_pairs
+;;
+5)
+echo "退出脚本。"
+exit 0
+;;
+*)
+echo "无效选项，请输入 1-5。"
+;;
+esac
+echo ""
+read -p "按 Enter 键返回菜单..."
+done
 }
 
 # 运行主逻辑
