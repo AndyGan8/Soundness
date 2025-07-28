@@ -58,11 +58,24 @@ install_docker_cli() {
     cd soundness-layer/soundness-cli
 
     if [ ! -f "docker-compose.yml" ]; then
-        echo "错误：缺少 docker-compose.yml 文件，尝试下载..."
-        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/docker-compose.yml || {
-            echo "错误：无法下载 docker-compose.yml 文件。"
-            exit 1
-        }
+        echo "创建 docker-compose.yml..."
+        cat > docker-compose.yml <<EOF
+version: '3.8'
+services:
+  soundness-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./.soundness:/home/soundness/.soundness
+      - \${PWD}/.soundness:/workspace
+    working_dir: /workspace
+    environment:
+      - RUST_LOG=info
+    user: root
+    stdin_open: true
+    tty: true
+EOF
     fi
     if [ ! -f "Dockerfile" ]; then
         echo "错误：缺少 Dockerfile 文件，尝试下载..."
@@ -85,13 +98,13 @@ install_docker_cli() {
         echo "检查并修复 docker-compose.yml..."
         cp docker-compose.yml docker-compose.yml.bak
         if ! grep -q "^version:" docker-compose.yml; then
+            echo "添加 version: '3.8'..."
             echo "version: '3.8'" > docker-compose.yml.tmp
             cat docker-compose.yml >> docker-compose.yml.tmp
-        else
-            cp docker-compose.yml docker-compose.yml.tmp
+            mv docker-compose.yml.tmp docker-compose.yml
         fi
-        awk '/^version:/{print; next} /^services:/{print; seen=0; next} /^[[:space:]]*soundness-cli:/{if (!seen) {print; seen=1} else {skip=1; next}} skip&&/^[[:space:]]/{next} {skip=0; print}' docker-compose.yml.tmp > docker-compose.yml
-        rm -f docker-compose.yml.tmp
+        awk '/^version:/{print; next} /^services:/{print; seen=0; next} /^[[:space:]]*soundness-cli:/{if (!seen) {print; seen=1} else {skip=1; next}} skip&&/^[[:space:]]/{next} {skip=0; print}' docker-compose.yml > docker-compose.yml.tmp
+        mv docker-compose.yml.tmp docker-compose.yml
         if ! grep -q "user: root" docker-compose.yml; then
             echo "添加 user: root 到 docker-compose.yml..."
             cp docker-compose.yml docker-compose.yml.tmp
@@ -106,7 +119,7 @@ install_docker_cli() {
             echo "恢复备份文件..."
             mv docker-compose.yml.bak docker-compose.yml
             echo "当前 docker-compose.yml 内容："
-            cat docker-compose.yml
+            cat -A docker-compose.yml
             exit 1
         fi
         echo "docker-compose.yml 已修复并验证。"
@@ -171,7 +184,7 @@ list_key_pairs() {
 show_menu() {
     echo "=== Soundness CLI 一键脚本 ==="
     echo "请选择操作："
-    echo "1. 安装 Soundness CLI（通过 Docker）"
+    echo "1. 安装 Soundness CLI (通过 Docker)"
     echo "2. 生成新的密钥对"
     echo "3. 导入密钥对"
     echo "4. 列出密钥对"
