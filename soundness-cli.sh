@@ -96,29 +96,26 @@ install_docker_cli() {
     # 自动修复 docker-compose.yml 的重复键并添加 user: root
     if [ -f "docker-compose.yml" ]; then
         echo "检查并修复 docker-compose.yml..."
-        # 检查是否存在重复的 soundness-cli 键
-        if grep -A1 "services:" docker-compose.yml | grep -q "soundness-cli:" && grep -A2 "services:" docker-compose.yml | grep -q "soundness-cli:"; then
-            echo "检测到重复的 soundness-cli 键，修复中..."
-            cp docker-compose.yml docker-compose.yml.bak
-            # 保留第一个 soundness-cli，移除后续重复
-            awk '/services:/{print; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.bak > docker-compose.yml
-        fi
+        # 备份原始文件
+        cp docker-compose.yml docker-compose.yml.bak
+        # 移除重复的 soundness-cli 键
+        awk '/services:/{print; seen=0; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.bak > docker-compose.yml.tmp
         # 添加 user: root（如果尚未存在）
-        if ! grep -q "user: root" docker-compose.yml; then
+        if ! grep -q "user: root" docker-compose.yml.tmp; then
             echo "添加 user: root 到 docker-compose.yml..."
-            cp docker-compose.yml docker-compose.yml.bak
-            sed -i '/^  soundness-cli:/a \    user: root' docker-compose.yml
-            echo "docker-compose.yml 已更新，添加 user: root。"
+            sed '/^  soundness-cli:/a \    user: root' docker-compose.yml.tmp > docker-compose.yml
         else
-            echo "docker-compose.yml 已包含 user: root，无需修改。"
+            mv docker-compose.yml.tmp docker-compose.yml
+            echo "docker-compose.yml 已包含 user: root，无需添加。"
         fi
+        rm -f docker-compose.yml.tmp
         # 验证 YAML 格式
-        docker-compose -f docker-compose.yml config >/dev/null 2>&1
-        if [ $? -ne 0 ]; then
+        if ! docker-compose -f docker-compose.yml config >/dev/null 2>&1; then
             echo "错误：docker-compose.yml 格式无效，恢复备份..."
             mv docker-compose.yml.bak docker-compose.yml
             exit 1
         fi
+        echo "docker-compose.yml 已修复并验证。"
     fi
 
     # 确保目录权限
