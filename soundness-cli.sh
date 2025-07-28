@@ -175,4 +175,38 @@ show_menu() {
     echo "2. 生成新的密钥对"
     echo "3. 导入密钥对"
     echo "4. 列出密钥对"
-    echo
+    echo "5. 退出"
+    read -p "请输入选项 (1-5)： " choice
+}
+
+main() {
+    check_requirements
+    while true; do
+        show_menu
+        case $choice in
+            1)
+                install_docker_cli
+                ;;
+            2)
+                generate_key_pair
+                ;;
+            3)
+                import_key_pair
+                ;;
+            4)
+                list_key_pairs
+                ;;
+            5)
+                echo "退出脚本。"
+                exit 0
+                ;;
+            *)
+                echo "无效选项，请输入 1-5。"
+                ;;
+        esac
+        echo ""
+        read -p "按 Enter 键返回菜单..."
+    done
+}
+
+main
