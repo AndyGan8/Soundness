@@ -99,8 +99,8 @@ install_docker_cli() {
         if ! grep -q "user: root" docker-compose.yml; then
             # 备份原始文件
             cp docker-compose.yml docker-compose.yml.bak
-            # 在 services.soundness-cli 下添加 user: root
-            awk '/services:/{print; print "  soundness-cli:"; next} /soundness-cli:/{print; print "    user: root"; next} {print}' docker-compose.yml.bak > docker-compose.yml
+            # 在 soundness-cli 服务下添加 user: root
+            sed -i '/^  soundness-cli:/a \    user: root' docker-compose.yml
             echo "docker-compose.yml 已更新，添加 user: root。"
         else
             echo "docker-compose.yml 已包含 user: root，无需修改。"
