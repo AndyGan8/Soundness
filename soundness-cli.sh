@@ -69,9 +69,11 @@ install_docker_cli() {
         exit 1
     fi
 
-    echo "创建或更新 docker-compose.yml..."
+    echo "检查并修复 docker-compose.yml..."
     cp docker-compose.yml docker-compose.yml.bak 2>/dev/null || echo "无现有 docker-compose.yml"
-    cat > docker-compose.yml <<EOF
+
+    # 创建临时标准文件
+    cat > docker-compose.yml.tmp <<EOF
 version: '3.8'
 services:
   soundness-cli:
@@ -89,6 +91,23 @@ services:
     tty: true
 EOF
 
+    # 如果现有文件存在，检查 version 和 user
+    if [ -f "docker-compose.yml" ]; then
+        if ! grep -q "^version: '3.8'" docker-compose.yml; then
+            echo "添加 version: '3.8'..."
+            echo "version: '3.8'" > docker-compose.yml.new
+            grep -v "^version:" docker-compose.yml >> docker-compose.yml.new
+            mv docker-compose.yml.new docker-compose.yml
+        fi
+        if ! grep -q "user: root" docker-compose.yml; then
+            echo "添加 user: root..."
+            sed '/^  soundness-cli:/a \    user: root' docker-compose.yml > docker-compose.yml.new
+            mv docker-compose.yml.new docker-compose.yml
+        fi
+    else
+        mv docker-compose.yml.tmp docker-compose.yml
+    fi
+
     if ! error=$(docker-compose -f docker-compose.yml config 2>&1 >/dev/null); then
         echo "错误：docker-compose.yml 格式无效："
         echo "$error"
@@ -98,7 +117,8 @@ EOF
         cat -A docker-compose.yml 2>/dev/null || echo "docker-compose.yml 不存在"
         exit 1
     fi
-    echo "docker-compose.yml 已创建或更新并验证。"
+    rm -f docker-compose.yml.tmp
+    echo "docker-compose.yml 已修复并验证。"
 
     if [ -d "target" ]; then
         echo "清理 target 目录以减少构建上下文..."
@@ -118,6 +138,7 @@ EOF
 }
 
 generate_key_pair() {
+    cd /root/soundness-layer/soundness-cli
     read -p "请输入密钥对名称（例如 my-key）： " key_name
     if [ -z "$key_name" ]; then
         echo "错误：密钥对名称不能为空。"
@@ -134,6 +155,7 @@ generate_key_pair() {
 }
 
 import_key_pair() {
+    cd /root/soundness-layer/soundness-cli
     echo "当前存储的密钥对名称："
     if [ -f ".soundness/key_store.json" ]; then
         docker-compose run --rm soundness-cli list-keys
@@ -157,6 +179,7 @@ import_key_pair() {
 }
 
 list_key_pairs() {
+    cd /root/soundness-layer/soundness-cli
     echo "列出所有存储的密钥对..."
     docker-compose run --rm soundness-cli list-keys
 }
