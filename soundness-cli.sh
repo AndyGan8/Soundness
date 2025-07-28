@@ -98,21 +98,31 @@ install_docker_cli() {
         echo "检查并修复 docker-compose.yml..."
         # 备份原始文件
         cp docker-compose.yml docker-compose.yml.bak
-        # 移除重复的 soundness-cli 键
-        awk '/services:/{print; seen=0; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.bak > docker-compose.yml.tmp
-        # 添加 user: root（如果尚未存在）
-        if ! grep -q "user: root" docker-compose.yml.tmp; then
-            echo "添加 user: root 到 docker-compose.yml..."
-            sed '/^  soundness-cli:/a \    user: root' docker-compose.yml.tmp > docker-compose.yml
+        # 确保 version 字段存在
+        if ! grep -q "^version:" docker-compose.yml; then
+            echo "version: '3.8'" > docker-compose.yml.tmp
+            cat docker-compose.yml >> docker-compose.yml.tmp
         else
-            mv docker-compose.yml.tmp docker-compose.yml
+            cp docker-compose.yml docker-compose.yml.tmp
+        fi
+        # 移除重复的 soundness-cli 键
+        awk '/services:/{print; seen=0; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.tmp > docker-compose.yml
+        rm -f docker-compose.yml.tmp
+        # 添加 user: root（如果尚未存在）
+        if ! grep -q "user: root" docker-compose.yml; then
+            echo "添加 user: root 到 docker-compose.yml..."
+            cp docker-compose.yml docker-compose.yml.tmp
+            sed '/^  soundness-cli:/a \    user: root' docker-compose.yml.tmp > docker-compose.yml
+            rm -f docker-compose.yml.tmp
+        else
             echo "docker-compose.yml 已包含 user: root，无需添加。"
         fi
-        rm -f docker-compose.yml.tmp
         # 验证 YAML 格式
         if ! docker-compose -f docker-compose.yml config >/dev/null 2>&1; then
             echo "错误：docker-compose.yml 格式无效，恢复备份..."
             mv docker-compose.yml.bak docker-compose.yml
+            echo "请手动检查 docker-compose.yml 内容："
+            cat docker-compose.yml
             exit 1
         fi
         echo "docker-compose.yml 已修复并验证。"
