@@ -76,25 +76,7 @@ services:
     stdin_open: true
     tty: true
 EOF
-    fi
-    if [ ! -f "Dockerfile" ]; then
-        echo "错误：缺少 Dockerfile 文件，尝试下载..."
-        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/Dockerfile || {
-            echo "错误：无法下载 Dockerfile 文件。"
-            exit 1
-        }
-    fi
-    if [ ! -f "Cargo.toml" ]; then
-        echo "错误：缺少 Cargo.toml 文件，请确认仓库完整性。"
-        exit 1
-    fi
-
-    if [ -d "target" ]; then
-        echo "清理 target 目录以减少构建上下文..."
-        rm -rf target
-    fi
-
-    if [ -f "docker-compose.yml" ]; then
+    else
         echo "检查并修复 docker-compose.yml..."
         cp docker-compose.yml docker-compose.yml.bak
         if ! grep -q "^version:" docker-compose.yml; then
@@ -103,8 +85,10 @@ EOF
             cat docker-compose.yml >> docker-compose.yml.tmp
             mv docker-compose.yml.tmp docker-compose.yml
         fi
+        # 移除重复的 soundness-cli 键
         awk '/^version:/{print; next} /^services:/{print; seen=0; next} /^[[:space:]]*soundness-cli:/{if (!seen) {print; seen=1} else {skip=1; next}} skip&&/^[[:space:]]/{next} {skip=0; print}' docker-compose.yml > docker-compose.yml.tmp
         mv docker-compose.yml.tmp docker-compose.yml
+        # 添加 user: root
         if ! grep -q "user: root" docker-compose.yml; then
             echo "添加 user: root 到 docker-compose.yml..."
             cp docker-compose.yml docker-compose.yml.tmp
@@ -113,6 +97,7 @@ EOF
         else
             echo "docker-compose.yml 已包含 user: root，无需添加。"
         fi
+        # 验证 YAML 格式
         if ! error=$(docker-compose -f docker-compose.yml config 2>&1 >/dev/null); then
             echo "错误：docker-compose.yml 格式无效："
             echo "$error"
