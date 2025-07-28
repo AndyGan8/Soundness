@@ -65,10 +65,32 @@ install_docker_cli() {
     fi
     cd soundness-layer/soundness-cli
 
-    # 创建 .dockerignore 文件
-    if [ ! -f ".dockerignore" ]; then
-        echo "创建 .dockerignore 文件以优化构建上下文..."
-        echo -e "target/\n.git/\n*.log\n*.md\nsoundnessup/" > .dockerignore
+    # 检查必要文件
+    if [ ! -f "docker-compose.yml" ]; then
+        echo "错误：缺少 docker-compose.yml 文件，尝试下载..."
+        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/docker-compose.yml
+        if [ $? -ne 0 ]; then
+            echo "错误：无法下载 docker-compose.yml 文件。"
+            exit 1
+        fi
+    fi
+    if [ ! -f "Dockerfile" ]; then
+        echo "错误：缺少 Dockerfile 文件，尝试下载..."
+        curl -O https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/soundness-cli/Dockerfile
+        if [ $? -ne 0 ]; then
+            echo "错误：无法下载 Dockerfile 文件。"
+            exit 1
+        fi
+    fi
+    if [ ! -f "Cargo.toml" ]; then
+        echo "错误：缺少 Cargo.toml 文件，请确认仓库完整性。"
+        exit 1
+    fi
+
+    # 清理大文件
+    if [ -d "target" ]; then
+        echo "清理 target 目录以减少构建上下文..."
+        rm -rf target
     fi
 
     # 拉取并构建 Soundness CLI Docker 镜像
@@ -95,7 +117,13 @@ generate_key_pair() {
 
 # 导入密钥对
 import_key_pair() {
-    read -p "请输入密钥对名称： " key_name
+    echo "当前存储的密钥对名称："
+    if [ -f "key_store.json" ]; then
+        docker-compose run --rm soundness-cli list-keys
+    else
+        echo "未找到 key_store.json，可能是首次导入。"
+    fi
+    read -p "请输入密钥对名称（或输入新名称以重新导入）： " key_name
     read -p "请输入助记词（mnemonic）： " mnemonic
     if [ -z "$key_name" ] || [ -z "$mnemonic" ]; then
         echo "错误：密钥对名称和助记词不能为空。"
