@@ -1,4 +1,5 @@
 #!/bin/bash
+clear
 
 # Soundness CLI 一键脚本
 # 支持选项：1. 安装 Docker CLI, 2. 生成密钥对, 3. 导入密钥对, 4. 列出密钥对
