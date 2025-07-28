@@ -93,22 +93,41 @@ install_docker_cli() {
         rm -rf target
     fi
 
-    # 自动修改 docker-compose.yml 以添加 user: root
+    # 自动修复 docker-compose.yml 的重复键并添加 user: root
     if [ -f "docker-compose.yml" ]; then
-        echo "检查并修改 docker-compose.yml 以添加 user: root..."
-        if ! grep -q "user: root" docker-compose.yml; then
-            # 备份原始文件
+        echo "检查并修复 docker-compose.yml..."
+        # 检查是否存在重复的 soundness-cli 键
+        if grep -A1 "services:" docker-compose.yml | grep -q "soundness-cli:" && grep -A2 "services:" docker-compose.yml | grep -q "soundness-cli:"; then
+            echo "检测到重复的 soundness-cli 键，修复中..."
             cp docker-compose.yml docker-compose.yml.bak
-            # 在 soundness-cli 服务下添加 user: root
+            # 保留第一个 soundness-cli，移除后续重复
+            awk '/services:/{print; next} /soundness-cli:/{if (!seen) {print; seen=1} else {next}} {print}' docker-compose.yml.bak > docker-compose.yml
+        fi
+        # 添加 user: root（如果尚未存在）
+        if ! grep -q "user: root" docker-compose.yml; then
+            echo "添加 user: root 到 docker-compose.yml..."
+            cp docker-compose.yml docker-compose.yml.bak
             sed -i '/^  soundness-cli:/a \    user: root' docker-compose.yml
             echo "docker-compose.yml 已更新，添加 user: root。"
         else
             echo "docker-compose.yml 已包含 user: root，无需修改。"
         fi
+        # 验证 YAML 格式
+        docker-compose -f docker-compose.yml config >/dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "错误：docker-compose.yml 格式无效，恢复备份..."
+            mv docker-compose.yml.bak docker-compose.yml
+            exit 1
+        fi
     fi
 
     # 确保目录权限
     chmod -R 777 .
+    if [ ! -d ".soundness" ]; then
+        echo "创建 .soundness 目录..."
+        mkdir .soundness
+        chmod 777 .soundness
+    fi
 
     # 拉取并构建 Soundness CLI Docker 镜像
     echo "构建 Soundness CLI Docker 镜像..."
@@ -125,16 +144,21 @@ generate_key_pair() {
     fi
     echo "正在生成新的密钥对：$key_name..."
     chmod -R 777 .
+    if [ ! -d ".soundness" ]; then
+        echo "创建 .soundness 目录..."
+        mkdir .soundness
+        chmod 777 .soundness
+    fi
     docker-compose run --rm soundness-cli generate-key --name "$key_name"
 }
 
 # 导入密钥对
 import_key_pair() {
     echo "当前存储的密钥对名称："
-    if [ -f "key_store.json" ]; then
+    if [ -f ".soundness/key_store.json" ]; then
         docker-compose run --rm soundness-cli list-keys
     else
-        echo "未找到 key_store.json，可能是首次导入。"
+        echo "未找到 .soundness/key_store.json，可能是首次导入。"
     fi
     read -p "请输入密钥对名称（或输入新名称以重新导入）： " key_name
     read -p "请输入助记词（mnemonic）： " mnemonic
@@ -144,6 +168,11 @@ import_key_pair() {
     fi
     echo "正在导入密钥对：$key_name..."
     chmod -R 777 .
+    if [ ! -d ".soundness" ]; then
+        echo "创建 .soundness 目录..."
+        mkdir .soundness
+        chmod 777 .soundness
+    fi
     docker-compose run --rm soundness-cli import-key --name "$key_name" --mnemonic "$mnemonic"
 }
 
