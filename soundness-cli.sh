@@ -2,7 +2,15 @@
 clear
 
 # Soundness CLI 一键脚本
-# 支持选项：1. 安装 Docker CLI, 2. 生成密钥对, 3. 导入密钥对, 4. 列出密钥对, 5. 验证并发送证明
+# 支持选项：
+# 1. 安装 Docker CLI
+# 2. 生成密钥对
+# 3. 导入密钥对
+# 4. 列出密钥对
+# 5. 验证并发送证明
+# 6. 批量导入密钥对
+# 7. 删除密钥对
+# 8. 退出
 
 set -e
 
@@ -199,6 +207,11 @@ send_proof() {
         docker-compose run --rm soundness-cli list-keys
     else
         echo "警告：未找到 .soundness/key_store.json，请先生成或导入密钥对。"
+        read -p "是否继续？(y/n)： " continue_choice
+        if [ "$continue_choice" != "y" ]; then
+            echo "操作取消。"
+            return
+        fi
     fi
 
     # 提示用户输入完整命令
@@ -209,7 +222,7 @@ send_proof() {
     # 验证命令是否为空
     if [ -z "$full_command" ]; then
         echo "错误：命令不能为空。"
-        exit 1
+        return
     fi
 
     # 解析命令参数
@@ -221,16 +234,17 @@ send_proof() {
 
     # 验证是否解析到所有必要参数
     if [ -z "$proof_file" ] || [ -z "$game" ] || [ -z "$proving_system" ] || [ -z "$payload" ]; then
-        echo "错误：无法解析完整的命令参数，请检查输入格式。必要参数：--proof-file, --game, --proving-system, --payload"
+        echo "错误：无法解析完整的命令参数，请检查输入格式。"
+        echo "必要参数：--proof-file, --game, --proving-system, --payload"
         echo "您输入的命令：$full_command"
-        exit 1
+        return
     fi
 
     # 验证 payload 的 JSON 格式
     echo "$payload" | jq . >/dev/null 2>&1 || {
         echo "错误：payload JSON 格式无效，请检查输入。"
         echo "您输入的 payload：$payload"
-        exit 1
+        return
     }
 
     # 确保 .soundness 目录存在
@@ -240,19 +254,211 @@ send_proof() {
         chmod 777 .soundness
     fi
 
-    # 执行 send 命令
+    # 执行 send 命令并捕获输出和返回值
     echo "正在发送证明：proof-file=$proof_file, game=$game, key-name=$key_name, proving-system=$proving_system..."
-    docker-compose run --rm soundness-cli send \
+    output=$(docker-compose run --rm soundness-cli send \
         --proof-file="$proof_file" \
         --game="$game" \
         --key-name="$key_name" \
         --proving-system="$proving_system" \
-        --payload="$payload" || {
-        echo "错误：发送证明失败，请检查输入参数或查看错误日志。"
+        --payload="$payload" 2>&1)
+    exit_code=$?
+
+    # 检查执行结果
+    if [ $exit_code -eq 0 ]; then
+        echo "✅ 证明发送成功！"
+        echo "服务器响应："
+        echo "$output"
+        
+        # 解析服务器响应，检查 sui_status
+        sui_status=$(echo "$output" | grep -oP '(?<="sui_status":")[^"]*')
+        if [ "$sui_status" = "error" ]; then
+            echo "⚠️ 警告：证明验证通过，但 Sui 网络处理失败。"
+            echo "可能的原因："
+            echo "  - Sui 网络连接问题或节点同步失败"
+            echo "  - 账户余额不足以支付交易费用"
+            echo "  - 提交的参数与 Sui 网络要求不匹配"
+            echo "建议："
+            echo "  - 检查 Sui 网络状态（可访问 Suiscan 或 Sui 官方状态页面）"
+            echo "  - 确认账户余额是否足够"
+            echo "  - 验证输入参数（如 proof-file、key-name）是否正确"
+            echo "  - 联系 Soundness CLI 支持团队，提供以下信息："
+            echo "    - Proof-file: $proof_file"
+            echo "    - Game: $game"
+            echo "    - Key-name: $key_name"
+            echo "    - Proving-system: $proving_system"
+            echo "    - 服务器响应："
+            echo "$output"
+        else
+            echo "🎉 证明已成功发送并在 Sui 网络上处理完成！"
+        fi
+    else
+        echo "❌ 错误：发送证明失败！"
+        echo "错误详情："
+        echo "$output"
+        echo "可能的原因："
+        echo "  - 无效的 proof-file 或 key-name"
+        echo "  - Docker 容器配置错误"
+        echo "  - 网络连接问题或服务器不可用"
+        echo "建议："
+        echo "  - 检查输入的 proof-file（$proof_file）是否存在且有效"
+        echo "  - 确认 key-name（$key_name）是否在 .soundness/key_store.json 中"
+        echo "  - 检查网络连接和服务器状态（https://testnet.soundness.xyz）"
+        echo "  - 确保 Docker 服务正常运行（sudo systemctl status docker）"
+        echo "  - 查看完整错误日志以获取更多信息"
         echo "您输入的命令：$full_command"
-        exit 1
-    }
-    echo "证明发送成功！"
+    fi
+}
+
+batch_import_keys() {
+    cd /root/soundness-layer/soundness-cli
+    echo "准备批量导入密钥对..."
+
+    # 显示当前密钥对（如果存在）
+    if [ -f ".soundness/key_store.json" ]; then
+        echo "当前存储的密钥对名称："
+        docker-compose run --rm soundness-cli list-keys
+    else
+        echo "未找到 .soundness/key_store.json，将创建新的密钥存储。"
+    fi
+
+    # 提示用户输入包含助记词的文件或手动输入
+    echo "请输入助记词（mnemonic）列表，每行包含一个 '名称:助记词' 对，格式如下："
+    echo "key_name1:mnemonic_phrase1"
+    echo "key_name2:mnemonic_phrase2"
+    echo "您可以："
+    echo "1. 手动输入（每行一个，输入完成后按 Ctrl+D 保存）"
+    echo "2. 提供包含助记词的文本文件路径"
+    read -p "请选择输入方式（1-手动输入，2-文件路径）： " input_method
+
+    if [ "$input_method" = "1" ]; then
+        echo "请输入助记词列表（每行格式：key_name:mnemonic，完成后按 Ctrl+D）："
+        keys_input=$(cat)
+    elif [ "$input_method" = "2" ]; then
+        read -p "请输入文本文件路径： " file_path
+        if [ ! -f "$file_path" ]; then
+            echo "❌ 错误：文件 $file_path 不存在！"
+            return
+        fi
+        keys_input=$(cat "$file_path")
+    else
+        echo "❌ 错误：无效的输入方式，请选择 1 或 2。"
+        return
+    fi
+
+    # 确保 .soundness 目录存在
+    if [ ! -d ".soundness" ]; then
+        echo "创建 .soundness 目录..."
+        mkdir .soundness
+        chmod 777 .soundness
+    fi
+
+    # 处理每一行输入
+    success_count=0
+    fail_count=0
+    echo "$keys_input" | while IFS=: read -r key_name mnemonic; do
+        # 跳过空行
+        if [ -z "$key_name" ] || [ -z "$mnemonic" ]; then
+            echo "⚠️ 警告：跳过无效行（缺少 key_name 或 mnemonic）：$key_name:$mnemonic"
+            ((fail_count++))
+            continue
+        fi
+
+        # 清理输入，去除前后空格
+        key_name=$(echo "$key_name" | xargs)
+        mnemonic=$(echo "$mnemonic" | xargs)
+
+        echo "正在导入密钥对：$key_name..."
+        output=$(docker-compose run --rm soundness-cli import-key --name "$key_name" --mnemonic "$mnemonic" 2>&1)
+        exit_code=$?
+
+        if [ $exit_code -eq 0 ]; then
+            echo "✅ 密钥对 $key_name 导入成功！"
+            ((success_count++))
+        else
+            echo "❌ 错误：导入密钥对 $key_name 失败！"
+            echo "错误详情："
+            echo "$output"
+            echo "可能的原因："
+            echo "  - 助记词格式无效"
+            echo "  - 密钥对名称已存在"
+            echo "  - Docker 容器配置错误"
+            echo "建议："
+            echo "  - 检查助记词是否符合 BIP39 标准"
+            echo "  - 确保 key_name 未被占用"
+            echo "  - 验证 Docker 服务状态（sudo systemctl status docker）"
+            ((fail_count++))
+        fi
+    done
+
+    # 总结导入结果
+    echo "🎉 批量导入完成！"
+    echo "成功导入：$success_count 个密钥对"
+    echo "失败：$fail_count 个密钥对"
+    if [ $fail_count -gt 0 ]; then
+        echo "请检查失败的密钥对并重试。"
+    fi
+}
+
+delete_key_pair() {
+    cd /root/soundness-layer/soundness-cli
+    echo "准备删除密钥对..."
+
+    # 检查是否存在密钥对
+    if [ ! -f ".soundness/key_store.json" ]; then
+        echo "❌ 错误：未找到 .soundness/key_store.json，没有可删除的密钥对。"
+        return
+    fi
+
+    # 显示当前密钥对
+    echo "当前存储的密钥对名称："
+    docker-compose run --rm soundness-cli list-keys
+
+    # 提示用户输入要删除的密钥对名称
+    read -p "请输入要删除的密钥对名称： " key_name
+    if [ -z "$key_name" ]; then
+        echo "❌ 错误：密钥对名称不能为空。"
+        return
+    fi
+
+    # 确认删除操作
+    echo "⚠️ 警告：删除密钥对 $key_name 是不可逆的操作！"
+    echo "请确保您已备份助记词，否则将无法恢复相关资金。"
+    read -p "是否确认删除？(y/n)： " confirm
+    if [ "$confirm" != "y" ]; then
+        echo "操作取消。"
+        return
+    fi
+
+    # 检查密钥对是否存在
+    key_exists=$(docker-compose run --rm soundness-cli list-keys | grep -w "$key_name")
+    if [ -z "$key_exists" ]; then
+        echo "❌ 错误：密钥对 $key_name 不存在！"
+        return
+    fi
+
+    # 执行删除操作（假设 soundness-cli 有 delete-key 命令）
+    # 注意：这里假设 soundness-cli 支持 delete-key 命令。如果不支持，需要手动修改 key_store.json
+    echo "正在删除密钥对：$key_name..."
+    output=$(docker-compose run --rm soundness-cli delete-key --name "$key_name" 2>&1)
+    exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
+        echo "✅ 密钥对 $key_name 删除成功！"
+    else
+        echo "❌ 错误：删除密钥对 $key_name 失败！"
+        echo "错误详情："
+        echo "$output"
+        echo "可能的原因："
+        echo "  - soundness-cli 不支持 delete-key 命令"
+        echo "  - 密钥对名称无效"
+        echo "  - Docker 容器配置错误"
+        echo "建议："
+        echo "  - 检查 soundness-cli 是否支持 delete-key 命令"
+        echo "  - 确认 key_name 是否正确"
+        echo "  - 验证 Docker 服务状态（sudo systemctl status docker）"
+        echo "  - 手动编辑 .soundness/key_store.json 删除密钥对（需谨慎）"
+    fi
 }
 
 show_menu() {
@@ -263,8 +469,10 @@ show_menu() {
     echo "3. 导入密钥对"
     echo "4. 列出密钥对"
     echo "5. 验证并发送证明"
-    echo "6. 退出"
-    read -p "请输入选项 (1-6)： " choice
+    echo "6. 批量导入密钥对"
+    echo "7. 删除密钥对"
+    echo "8. 退出"
+    read -p "请输入选项 (1-8)： " choice
 }
 
 main() {
@@ -288,11 +496,17 @@ main() {
                 send_proof
                 ;;
             6)
+                batch_import_keys
+                ;;
+            7)
+                delete_key_pair
+                ;;
+            8)
                 echo "退出脚本。"
                 exit 0
                 ;;
             *)
-                echo "无效选项，请输入 1-6。"
+                echo "无效选项，请输入 1-8。"
                 ;;
         esac
         echo ""
