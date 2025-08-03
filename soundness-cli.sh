@@ -7,7 +7,7 @@ clear
 # 2. 生成密钥对
 # 3. 导入密钥对
 # 4. 列出密钥对
-# 5. 验证并发送证明
+# 5. 验证并发送证明（优化：自动重试、文件验证）
 # 6. 批量导入密钥对
 # 7. 删除密钥对
 # 8. 退出
@@ -206,7 +206,7 @@ send_proof() {
         echo "当前存储的密钥对名称："
         docker-compose run --rm soundness-cli list-keys
     else
-        echo "警告：未找到 .soundness/key_store.json，请先生成或导入密钥对。"
+        echo "❌ 错误：未找到 .soundness/key_store.json，请先生成或导入密钥对。"
         read -p "是否继续？(y/n)： " continue_choice
         if [ "$continue_choice" != "y" ]; then
             echo "操作取消。"
@@ -221,7 +221,7 @@ send_proof() {
 
     # 验证命令是否为空
     if [ -z "$full_command" ]; then
-        echo "错误：命令不能为空。"
+        echo "❌ 错误：命令不能为空。"
         return
     fi
 
@@ -233,19 +233,53 @@ send_proof() {
     payload=$(echo "$full_command" | grep -oP "(?<=--payload=)('[^']*'|[^\s]+)" | sed "s/^'//;s/'$//")
 
     # 验证是否解析到所有必要参数
-    if [ -z "$proof_file" ] || [ -z "$game" ] || [ -z "$proving_system" ] || [ -z "$payload" ]; then
-        echo "错误：无法解析完整的命令参数，请检查输入格式。"
-        echo "必要参数：--proof-file, --game, --proving-system, --payload"
+    if [ -z "$proof_file" ] || [ -z "$game" ] || [ -z "$key_name" ] || [ -z "$proving_system" ] || [ -z "$payload" ]; then
+        echo "❌ 错误：无法解析完整的命令参数，请检查输入格式。"
+        echo "必要参数：--proof-file, --game, --key-name, --proving-system, --payload"
         echo "您输入的命令：$full_command"
         return
     fi
 
     # 验证 payload 的 JSON 格式
     echo "$payload" | jq . >/dev/null 2>&1 || {
-        echo "错误：payload JSON 格式无效，请检查输入。"
+        echo "❌ 错误：payload JSON 格式无效，请检查输入。"
         echo "您输入的 payload：$payload"
         return
     }
+
+    # 验证 WASM 文件和 shader-path 是否存在
+    wasm_path=$(echo "$payload" | jq -r '.program')
+    shader_path=$(echo "$payload" | jq -r '.["shader-path"]')
+    if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
+        echo "❌ 错误：WASM 文件 $wasm_path 不存在！"
+        echo "建议：确认文件路径是否正确，或检查 /root/ligero_internal 目录是否正确映射。"
+        return
+    fi
+    if [ -n "$shader_path" ] && [ "$shader_path" != "null" ] && [ ! -d "$shader_path" ]; then
+        echo "❌ 错误：shader 目录 $shader_path 不存在！"
+        echo "建议：确认目录路径是否正确，或检查 /root/ligero_internal 目录是否正确映射。"
+        return
+    fi
+
+    # 验证 proof-file 是否有效（尝试访问 Walrus）
+    if ! curl -s -I "https://walruscan.io/blob/$proof_file" >/dev/null 2>&1; then
+        echo "⚠️ 警告：无法访问 proof-file $proof_file，可能无效或 Walrus 服务不可用。"
+        read -p "是否继续？(y/n)： " continue_proof
+        if [ "$continue_proof" != "y" ]; then
+            echo "操作取消。"
+            return
+        fi
+    fi
+
+    # 验证 key-name 是否存在
+    if [ -f ".soundness/key_store.json" ]; then
+        key_exists=$(docker-compose run --rm soundness-cli list-keys | grep -w "$key_name")
+        if [ -z "$key_exists" ]; then
+            echo "❌ 错误：密钥对 $key_name 不存在！"
+            echo "建议：使用选项 3 或 6 导入密钥对，或检查 key-name 是否正确。"
+            return
+        fi
+    fi
 
     # 确保 .soundness 目录存在
     if [ ! -d ".soundness" ]; then
@@ -254,60 +288,77 @@ send_proof() {
         chmod 777 .soundness
     fi
 
-    # 执行 send 命令并捕获输出和返回值
-    echo "正在发送证明：proof-file=$proof_file, game=$game, key-name=$key_name, proving-system=$proving_system..."
-    output=$(docker-compose run --rm soundness-cli send \
-        --proof-file="$proof_file" \
-        --game="$game" \
-        --key-name="$key_name" \
-        --proving-system="$proving_system" \
-        --payload="$payload" 2>&1)
-    exit_code=$?
+    # 执行 send 命令，添加重试机制（最多 3 次）
+    max_retries=3
+    retry_count=0
+    while [ $retry_count -lt $max_retries ]; do
+        echo "正在发送证明（尝试 $((retry_count + 1))/$max_retries）：proof-file=$proof_file, game=$game, key-name=$key_name, proving-system=$proving_system..."
+        output=$(docker-compose run --rm soundness-cli send \
+            --proof-file="$proof_file" \
+            --game="$game" \
+            --key-name="$key_name" \
+            --proving-system="$proving_system" \
+            --payload="$payload" 2>&1)
+        exit_code=$?
 
-    # 检查执行结果
-    if [ $exit_code -eq 0 ]; then
-        echo "✅ 证明发送成功！"
-        echo "服务器响应："
-        echo "$output"
-        
-        # 解析服务器响应，检查 sui_status
-        sui_status=$(echo "$output" | grep -oP '(?<="sui_status":")[^"]*')
-        if [ "$sui_status" = "error" ]; then
-            echo "⚠️ 警告：证明验证通过，但 Sui 网络处理失败。"
-            echo "可能的原因："
-            echo "  - Sui 网络连接问题或节点同步失败"
-            echo "  - 账户余额不足以支付交易费用"
-            echo "  - 提交的参数与 Sui 网络要求不匹配"
-            echo "建议："
-            echo "  - 检查 Sui 网络状态（可访问 Suiscan 或 Sui 官方状态页面）"
-            echo "  - 确认账户余额是否足够"
-            echo "  - 验证输入参数（如 proof-file、key-name）是否正确"
-            echo "  - 联系 Soundness CLI 支持团队，提供以下信息："
-            echo "    - Proof-file: $proof_file"
-            echo "    - Game: $game"
-            echo "    - Key-name: $key_name"
-            echo "    - Proving-system: $proving_system"
-            echo "    - 服务器响应："
+        # 检查执行结果
+        if [ $exit_code -eq 0 ]; then
+            echo "✅ 证明发送成功！"
+            echo "服务器响应："
             echo "$output"
+            
+            # 解析服务器响应，检查 sui_status
+            sui_status=$(echo "$output" | grep -oP '(?<="sui_status":")[^"]*')
+            if [ "$sui_status" = "error" ]; then
+                echo "⚠️ 警告：证明验证通过，但 Sui 网络处理失败（尝试 $((retry_count + 1))/$max_retries）。"
+                echo "可能的原因："
+                echo "  - Sui 网络连接问题或节点同步失败"
+                echo "  - 账户余额不足以支付交易费用"
+                echo "  - 提交的参数与 Sui 网络要求不匹配"
+                echo "建议："
+                echo "  - 检查 Sui 网络状态（可访问 https://suiscan.xyz/testnet）"
+                echo "  - 确认账户余额是否足够（使用 sui client balance --address <your_address>）"
+                echo "  - 验证 WASM 文件 ($wasm_path) 和 args 参数是否正确"
+                echo "  - 联系 Soundness CLI 支持团队，提供以下信息："
+                echo "    - Proof-file: $proof_file"
+                echo "    - Game: $game"
+                echo "    - Key-name: $key_name"
+                echo "    - Proving-system: $proving_system"
+                echo "    - 服务器响应："
+                echo "$output"
+                ((retry_count++))
+                if [ $retry_count -lt $max_retries ]; then
+                    echo "将在 5 秒后重试..."
+                    sleep 5
+                    continue
+                else
+                    echo "❌ 错误：已达到最大重试次数 ($max_retries)，Sui 网络处理仍失败。"
+                    return
+                fi
+            else
+                echo "🎉 证明已成功发送并在 Sui 网络上处理完成！"
+                return
+            fi
         else
-            echo "🎉 证明已成功发送并在 Sui 网络上处理完成！"
+            echo "❌ 错误：发送证明失败！"
+            echo "错误详情："
+            echo "$output"
+            echo "可能的原因："
+            echo "  - 无效的 proof-file ($proof_file)"
+            echo "  - 无效的 key-name ($key_name)"
+            echo "  - WASM 文件 ($wasm_path) 或 shader 目录 ($shader_path) 无效"
+            echo "  - Docker 容器配置错误"
+            echo "  - 网络连接问题或服务器不可用"
+            echo "建议："
+            echo "  - 检查 proof-file 是否有效（访问 https://walruscan.io/blob/$proof_file）"
+            echo "  - 确认 key-name 是否在 .soundness/key_store.json 中（使用选项 4）"
+            echo "  - 验证 WASM 文件和 shader 目录是否存在"
+            echo "  - 检查网络连接（ping testnet.soundness.xyz）"
+            echo "  - 确保 Docker 服务正常运行（sudo systemctl status docker）"
+            echo "您输入的命令：$full_command"
+            return
         fi
-    else
-        echo "❌ 错误：发送证明失败！"
-        echo "错误详情："
-        echo "$output"
-        echo "可能的原因："
-        echo "  - 无效的 proof-file 或 key-name"
-        echo "  - Docker 容器配置错误"
-        echo "  - 网络连接问题或服务器不可用"
-        echo "建议："
-        echo "  - 检查输入的 proof-file（$proof_file）是否存在且有效"
-        echo "  - 确认 key-name（$key_name）是否在 .soundness/key_store.json 中"
-        echo "  - 检查网络连接和服务器状态（https://testnet.soundness.xyz）"
-        echo "  - 确保 Docker 服务正常运行（sudo systemctl status docker）"
-        echo "  - 查看完整错误日志以获取更多信息"
-        echo "您输入的命令：$full_command"
-    fi
+    done
 }
 
 batch_import_keys() {
@@ -327,7 +378,7 @@ batch_import_keys() {
     echo "key_name1:mnemonic_phrase1"
     echo "key_name2:mnemonic_phrase2"
     echo "您可以："
-    echo "1. 手动输入（每行一个，输入完成后按 Ctrl+D 保存）"
+    echo "1. 手动输入（每行一个，完成后按 Ctrl+D 保存）"
     echo "2. 提供包含助记词的文本文件路径"
     read -p "请选择输入方式（1-手动输入，2-文件路径）： " input_method
 
@@ -438,7 +489,6 @@ delete_key_pair() {
     fi
 
     # 执行删除操作（假设 soundness-cli 有 delete-key 命令）
-    # 注意：这里假设 soundness-cli 支持 delete-key 命令。如果不支持，需要手动修改 key_store.json
     echo "正在删除密钥对：$key_name..."
     output=$(docker-compose run --rm soundness-cli delete-key --name "$key_name" 2>&1)
     exit_code=$?
