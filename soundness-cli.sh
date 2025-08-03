@@ -16,7 +16,7 @@ set -e
 
 check_requirements() {
     if ! command -v curl >/dev/null 2>&1; then
-        echo "错误：需要安装 curl。请先安装 curl。"
+        echo "错误：需要安装 curl。请先安装 curl：sudo apt-get install -y curl"
         exit 1
     fi
     if ! command -v docker >/dev/null 2>&1; then
@@ -25,7 +25,7 @@ check_requirements() {
         if ! systemctl is-active --quiet docker; then
             echo "错误：Docker 服务未运行。尝试启动..."
             sudo systemctl start docker || {
-                echo "错误：无法启动 Docker 服务，请检查系统配置。"
+                echo "错误：无法启动 Docker 服务，请检查系统配置：sudo systemctl status docker"
                 exit 1
             }
         fi
@@ -46,49 +46,85 @@ install_docker_cli() {
     # 安装 soundnessup
     if ! command -v soundnessup >/dev/null 2>&1; then
         echo "安装 soundnessup 工具..."
-        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash || {
-            echo "错误：无法安装 soundnessup，请检查网络连接或访问 https://github.com/SoundnessLabs/soundness-layer"
+        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o install_soundnessup.sh || {
+            echo "错误：无法下载 soundnessup 安装脚本，请检查网络连接：ping raw.githubusercontent.com"
             echo "手动安装步骤："
-            echo "  1. 下载 soundnessup 安装脚本：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o install_soundnessup.sh"
-            echo "  2. 检查并运行：bash install_soundnessup.sh"
-            echo "  3. 确保 /usr/local/bin 在 PATH 中：export PATH=\$PATH:/usr/local/bin"
-            echo "  4. 验证安装：soundnessup --help"
+            echo "  1. 下载脚本：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o install_soundnessup.sh"
+            echo "  2. 检查脚本：cat install_soundnessup.sh"
+            echo "  3. 运行脚本：bash install_soundnessup.sh"
+            echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
             exit 1
         }
+        chmod +x install_soundnessup.sh
+        bash install_soundnessup.sh || {
+            echo "错误：运行 soundnessup 安装脚本失败"
+            echo "请检查 install_soundnessup.sh 内容：cat install_soundnessup.sh"
+            exit 1
+        }
+        rm -f install_soundnessup.sh
+
         # 显式设置 PATH
-        export PATH=$PATH:/usr/local/bin:/root/.local/bin
-        # 验证 soundnessup 是否可用
-        if ! command -v soundnessup >/dev/null 2>&1; then
-            echo "错误：soundnessup 安装后仍不可用。"
-            echo "请手动检查："
-            echo "  1. 确认 /usr/local/bin/soundnessup 存在：ls -l /usr/local/bin/soundnessup"
+        export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
+        # 检查可能的安装路径
+        soundnessup_path=""
+        for path in /usr/local/bin/soundnessup /root/.local/bin/soundnessup /root/.soundness/bin/soundnessup; do
+            if [ -f "$path" ] && [ -x "$path" ]; then
+                soundnessup_path="$path"
+                break
+            fi
+        done
+
+        if [ -n "$soundnessup_path" ]; then
+            echo "✅ 找到 soundnessup：$soundnessup_path"
+            # 移动到 /usr/local/bin
+            if [ "$soundnessup_path" != "/usr/local/bin/soundnessup" ]; then
+                echo "移动 soundnessup 到 /usr/local/bin..."
+                sudo mv "$soundnessup_path" /usr/local/bin/soundnessup
+                sudo chmod +x /usr/local/bin/soundnessup
+            fi
+        else
+            echo "错误：soundnessup 未找到，可能安装失败。"
+            echo "检查以下路径："
+            echo "  ls -l /usr/local/bin/soundnessup"
+            echo "  ls -l /root/.local/bin/soundnessup"
+            echo "  ls -l /root/.soundness/bin/soundnessup"
+            echo "手动修复步骤："
+            echo "  1. 重新运行安装：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
             echo "  2. 检查 PATH：echo \$PATH"
+            echo "  3. 验证：/usr/local/bin/soundnessup --help"
+            echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
+            exit 1
+        fi
+
+        # 验证 soundnessup 是否可用
+        if ! soundnessup --help >/dev/null 2>&1; then
+            echo "错误：soundnessup 安装后不可用。"
+            echo "请检查："
+            echo "  1. 文件权限：ls -l /usr/local/bin/soundnessup"
+            echo "  2. PATH 环境：echo \$PATH"
             echo "  3. 手动运行：/usr/local/bin/soundnessup --help"
             echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
             exit 1
         fi
-        # 刷新 shell 环境
-        if [ -f ~/.bashrc ]; then
-            source ~/.bashrc
-        elif [ -f ~/.zshenv ]; then
-            source ~/.zshenv
-        else
-            echo "警告：未找到 ~/.bashrc 或 ~/.zshenv，请手动更新 PATH 或重启终端：export PATH=\$PATH:/usr/local/bin"
-        fi
-    fi
-
-    # 验证 soundnessup 可用性
-    echo "验证 soundnessup 安装..."
-    if soundnessup --help >/dev/null 2>&1; then
         echo "✅ soundnessup 已正确安装。"
+
+        # 持久化 PATH
+        if ! grep -q '/usr/local/bin' /root/.bashrc; then
+            echo "export PATH=\$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin" >> /root/.bashrc
+            echo "已将 PATH 更新写入 /root/.bashrc"
+        fi
+        source /root/.bashrc
     else
-        echo "错误：soundnessup 不可用，请检查安装。"
-        echo "手动修复步骤："
-        echo "  1. 确认 soundnessup 二进制文件：ls -l /usr/local/bin/soundnessup"
-        echo "  2. 检查 PATH：echo \$PATH"
-        echo "  3. 重新运行安装脚本：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
-        echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
-        exit 1
+        echo "✅ soundnessup 已存在，正在验证..."
+        if ! soundnessup --help >/dev/null 2>&1; then
+            echo "错误：soundnessup 不可用，请检查："
+            echo "  1. 文件权限：ls -l /usr/local/bin/soundnessup"
+            echo "  2. PATH 环境：echo \$PATH"
+            echo "  3. 手动运行：/usr/local/bin/soundnessup --help"
+            echo "  4. 重新安装：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
+            exit 1
+        fi
+        echo "✅ soundnessup 已正确安装。"
     fi
 
     # 更新 Soundness CLI
@@ -100,7 +136,8 @@ install_docker_cli() {
             echo "手动修复步骤："
             echo "  1. 检查网络：ping raw.githubusercontent.com"
             echo "  2. 手动运行：soundnessup install"
-            echo "  3. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
+            echo "  3. 验证版本：soundnessup --help"
+            echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
             exit 1
         }
     }
@@ -685,6 +722,9 @@ show_menu() {
 
 main() {
     check_requirements
+    # 确保 PATH 包含 soundnessup 的路径
+    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
+    source /root/.bashrc
     while true; do
         show_menu
         case $choice in
