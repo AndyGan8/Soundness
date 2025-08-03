@@ -40,8 +40,47 @@ check_requirements() {
     fi
 }
 
+install_rust_cargo() {
+    echo "检查 Rust 和 Cargo 是否安装..."
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "安装 Rust 和 Cargo..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || {
+            echo "错误：无法安装 Rust 和 Cargo，请检查网络连接或访问 https://rustup.rs/"
+            echo "手动安装步骤："
+            echo "  1. 下载安装脚本：curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o rustup.sh"
+            echo "  2. 运行脚本：sh rustup.sh -y"
+            echo "  3. 添加 Cargo 到 PATH：export PATH=\$HOME/.cargo/bin:\$PATH"
+            echo "  4. 验证安装：cargo --version"
+            echo "  5. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
+            exit 1
+        }
+        # 添加 Cargo 到 PATH
+        export PATH=$HOME/.cargo/bin:$PATH
+        # 持久化 PATH
+        if ! grep -q '.cargo/bin' /root/.bashrc; then
+            echo "export PATH=\$HOME/.cargo/bin:\$PATH" >> /root/.bashrc
+            echo "已将 Cargo PATH 写入 /root/.bashrc"
+        fi
+        source /root/.bashrc
+    fi
+    # 验证 Cargo
+    if ! cargo --version >/dev/null 2>&1; then
+        echo "错误：Cargo 安装后不可用。"
+        echo "请检查："
+        echo "  1. 安装路径：ls -l /root/.cargo/bin/cargo"
+        echo "  2. PATH 环境：echo \$PATH"
+        echo "  3. 手动运行：/root/.cargo/bin/cargo --version"
+        echo "  4. 重新安装 Rust：curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -y"
+        exit 1
+    fi
+    echo "✅ Rust 和 Cargo 已正确安装：$(cargo --version)"
+}
+
 install_docker_cli() {
     echo "正在安装/更新 Soundness CLI..."
+
+    # 安装 Rust 和 Cargo
+    install_rust_cargo
 
     # 安装 soundnessup
     if ! command -v soundnessup >/dev/null 2>&1; then
@@ -396,10 +435,10 @@ send_proof() {
                 if [ "$downloaded" = false ]; then
                     echo "❌ 错误：无法下载 WASM 文件 $wasm_path"
                     echo "建议："
-                    echo "  - 确认网络连接（ping raw.githubusercontent.com）"
+                    echo "  - 确认网络连接：ping raw.githubusercontent.com"
                     echo "  - 检查 https://github.com/SoundnessLabs/soundness-layer 是否包含 8queen.wasm"
                     echo "  - 加入 Discord（https://discord.gg/soundnesslabs）获取支持和 8queen.wasm 文件"
-                    echo "  - 尝试编译 ligero_internal 源码（cd /root/ligero_internal/sdk && make build）"
+                    echo "  - 尝试编译 ligero_internal 源码：cd /root/ligero_internal/sdk && make build"
                     echo "  - 更新 payload 中的 program 路径为现有 WASM 文件"
                     return
                 fi
@@ -434,10 +473,10 @@ send_proof() {
             if [ "$downloaded" = false ]; then
                 echo "❌ 错误：无法下载 ELF 文件 $elf_file"
                 echo "建议："
-                echo "  - 确认网络连接（ping raw.githubusercontent.com）"
+                echo "  - 确认网络连接：ping raw.githubusercontent.com"
                 echo "  - 检查 https://github.com/SoundnessLabs/soundness-layer 是否包含 8queen.elf"
                 echo "  - 加入 Discord（https://discord.gg/soundnesslabs）获取支持和 8queen.elf 文件"
-                echo "  - 尝试编译 ligero_internal 源码（cd /root/ligero_internal/sdk && make build）"
+                echo "  - 尝试编译 ligero_internal 源码：cd /root/ligero_internal/sdk && make build"
                 return
             fi
         fi
@@ -722,8 +761,8 @@ show_menu() {
 
 main() {
     check_requirements
-    # 确保 PATH 包含 soundnessup 的路径
-    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
+    # 确保 PATH 包含 soundnessup 和 Cargo 的路径
+    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin:$HOME/.cargo/bin
     source /root/.bashrc
     while true; do
         show_menu
