@@ -48,16 +48,47 @@ install_docker_cli() {
         echo "安装 soundnessup 工具..."
         curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash || {
             echo "错误：无法安装 soundnessup，请检查网络连接或访问 https://github.com/SoundnessLabs/soundness-layer"
+            echo "手动安装步骤："
+            echo "  1. 下载 soundnessup 安装脚本：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o install_soundnessup.sh"
+            echo "  2. 检查并运行：bash install_soundnessup.sh"
+            echo "  3. 确保 /usr/local/bin 在 PATH 中：export PATH=\$PATH:/usr/local/bin"
+            echo "  4. 验证安装：soundnessup --help"
             exit 1
         }
-        # 更新 shell 环境
+        # 显式设置 PATH
+        export PATH=$PATH:/usr/local/bin:/root/.local/bin
+        # 验证 soundnessup 是否可用
+        if ! command -v soundnessup >/dev/null 2>&1; then
+            echo "错误：soundnessup 安装后仍不可用。"
+            echo "请手动检查："
+            echo "  1. 确认 /usr/local/bin/soundnessup 存在：ls -l /usr/local/bin/soundnessup"
+            echo "  2. 检查 PATH：echo \$PATH"
+            echo "  3. 手动运行：/usr/local/bin/soundnessup --help"
+            echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
+            exit 1
+        fi
+        # 刷新 shell 环境
         if [ -f ~/.bashrc ]; then
             source ~/.bashrc
         elif [ -f ~/.zshenv ]; then
             source ~/.zshenv
         else
-            echo "警告：未找到 ~/.bashrc 或 ~/.zshenv，请手动更新 PATH 或重启终端。"
+            echo "警告：未找到 ~/.bashrc 或 ~/.zshenv，请手动更新 PATH 或重启终端：export PATH=\$PATH:/usr/local/bin"
         fi
+    fi
+
+    # 验证 soundnessup 可用性
+    echo "验证 soundnessup 安装..."
+    if soundnessup --help >/dev/null 2>&1; then
+        echo "✅ soundnessup 已正确安装。"
+    else
+        echo "错误：soundnessup 不可用，请检查安装。"
+        echo "手动修复步骤："
+        echo "  1. 确认 soundnessup 二进制文件：ls -l /usr/local/bin/soundnessup"
+        echo "  2. 检查 PATH：echo \$PATH"
+        echo "  3. 重新运行安装脚本：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
+        echo "  4. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
+        exit 1
     fi
 
     # 更新 Soundness CLI
@@ -66,6 +97,10 @@ install_docker_cli() {
         echo "错误：无法更新 Soundness CLI，尝试重新安装..."
         soundnessup install || {
             echo "错误：无法安装 Soundness CLI，请检查网络连接或 soundnessup 工具。"
+            echo "手动修复步骤："
+            echo "  1. 检查网络：ping raw.githubusercontent.com"
+            echo "  2. 手动运行：soundnessup install"
+            echo "  3. 加入 Discord（https://discord.gg/soundnesslabs）获取支持"
             exit 1
         }
     }
