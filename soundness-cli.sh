@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.3
+# 版本：1.0.4
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.3"
+SCRIPT_VERSION="1.0.4"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -408,7 +408,7 @@ send_proof() {
     log_message "list-keys 输出：$output"
     echo "$output"
     echo "请输入完整的 soundness-cli send 命令，例如："
-    echo "soundness-cli send --proof-file=\"proof.bin\" --elf-file=\"program.elf\" --key-name=\"andygan\" --proving-system=\"ligetron\" --payload='{\"program\": \"/path/to/wasm\", ...}' --game=\"8queens\""
+    echo "soundness-cli send --proof-file=\"proof.bin\" --elf-file=\"program.elf\" --key-name=\"andygan\" --proving-system=\"ligetron\" --payload=\"{\\\"program\\\": \\\"/path/to/wasm\\\", ...}\" --game=\"8queens\""
     read -r -p "命令： " full_command
     if [ -z "$full_command" ]; then
         handle_error "命令不能为空" "提供完整的 send 命令"
@@ -420,7 +420,7 @@ send_proof() {
     payload=""
     game=""
     eval set -- $(getopt -o p:e:k:s:d:g: --long proof-file:,elf-file:,key-name:,proving-system:,payload:,game: -- $full_command 2>/dev/null) || {
-        handle_error "命令解析失败" "检查命令格式;参考文档"
+        handle_error "命令解析失败" "检查命令格式;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
     }
     while true; do
         case "$1" in
@@ -434,14 +434,17 @@ send_proof() {
             *) handle_error "无效参数 $1" "检查命令格式" ;;
         esac
     done
-    if [ -z "$proof_file" ] || [ -z "$key_name" ] || [ -z "$proving_system" ]; then
+    if [ -z "$proof_file" ] || [ -z "$key_name" ] || [ -z "$proving-system" ]; then
         handle_error "缺少必要参数" "提供 --proof-file、--key-name 和 --proving-system"
     fi
     if [ -z "$game" ] && [ -z "$elf_file" ]; then
         handle_error "必须提供 --game 或 --elf-file" "检查命令格式"
     fi
     if [ -n "$payload" ]; then
-        echo "$payload" | jq . >/dev/null 2>&1 || handle_error "payload JSON 格式无效" "检查 payload 格式：$payload"
+        echo "$payload" | jq . >/dev/null 2>&1 || {
+            log_message "无效 JSON：$payload"
+            handle_error "payload JSON 格式无效" "检查 JSON 语法（使用双引号、转义字符）;验证 args 字段格式;运行 'echo \"$payload\" | jq .' 检查;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+        }
         wasm_path=$(echo "$payload" | jq -r '.program')
         shader_path=$(echo "$payload" | jq -r '.["shader-path"]')
         if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
@@ -471,7 +474,7 @@ send_proof() {
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.elf"
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.elf"
             )
-            for url in "${elf_urls[@]}"; do
+            for url in "${wasm_urls[@]}"; do
                 if retry_command "curl -s -o \"$elf_file\" \"$url\"" 3; then
                     chmod 644 "$elf_file"
                     break
@@ -492,8 +495,8 @@ send_proof() {
     setup_ligero_internal
     send_command="docker-compose run --rm -it soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
-    [ -n "$payload" ] && send_command="$send_command --payload='$payload'"
-    [ -n "$game" ] && send_command="$send_command --game=\"$game\""
+    [ -n "$payload" ] && send_command="$send_command --payload \"$payload\""
+    [ -n "$game" ] && send_command="$send_command --game \"$game\""
     if [ -n "$password" ]; then
         send_command="echo \"$password\" | $send_command"
     fi
@@ -514,6 +517,12 @@ send_proof() {
                 [ $retry_count -lt $max_retries ] && sleep 5 && continue
                 handle_error "Sui 网络处理失败" "检查 Sui 网络状态：https://suiscan.xyz/testnet;确认账户余额;验证 WASM 文件"
             fi
+            proof_hash=$(echo "$output" | jq -r '.proof_data_blob_id // empty')
+            if echo "$output" | grep -q "409 Conflict" || echo "$output" | grep -q "Proof with hash.*has already been processed"; then
+                proof_hash=$(echo "$output" | jq -r '.message // empty' | grep -oE '[0-9a-f]{64}' || echo "unknown")
+                log_message "⚠️ 证明已提交：$output"
+                handle_error "证明已处理（哈希：$proof_hash）" "检查 Walruscan：https://walruscan.io/blob/$proof_file;获取新 proof-file（参考 Discord 或文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli）;确认证明是否与账户关联"
+            fi
             log_message "🎉 证明成功处理！"
             echo "$output" | jq -r '.sui_transaction_digest // empty' | grep -v '^$' && echo "交易摘要：$(echo "$output" | jq -r '.sui_transaction_digest')"
             echo "$output" | jq -r '.suiscan_link // empty' | grep -v '^$' && echo "Suiscan 链接：$(echo "$output" | jq -r '.suiscan_link')"
@@ -522,7 +531,7 @@ send_proof() {
         fi
         ((retry_count++))
     done
-    handle_error "发送证明失败" "检查 proof-file：https://walruscan.io/blob/$proof_file;验证 key-name;检查网络：ping testnet.soundness.xyz;更新 CLI（选项 1）"
+    handle_error "发送证明失败" "检查 proof-file：https://walruscan.io/blob/$proof_file;验证 key-name;检查网络：ping testnet.soundness.xyz;更新 CLI（选项 1）;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
 }
 
 # 批量导入密钥对
