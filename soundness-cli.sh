@@ -2,30 +2,29 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.0
+# 版本：1.0.1
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
 # 3. 导入密钥对
 # 4. 列出密钥对
-# 5. 验证并发送证明（自动配置 ligero_internal）
+# 5. 验证并发送证明
 # 6. 批量导入密钥对
 # 7. 删除密钥对
 # 8. 退出
-# 支持多语言（默认中文）、日志记录、错误重试和非 root 用户
 
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 LOG_FILE="/root/soundness-script.log"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-script/main/VERSION"
-LANG=${LANG:-zh}  # 默认语言为中文，可通过环境变量设置
+LANG=${LANG:-zh}
 
-# 检测操作系统并设置包管理器
+# 检测操作系统
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -93,12 +92,13 @@ retry_command() {
         if [ $retry_count -lt $max_retries ]; then
             log_message "将在 5 秒后重试..."
             sleep 5
+        else
+            handle_error "命令失败：$cmd" "检查网络：ping raw.githubusercontent.com;验证命令参数;检查 Docker 服务：sudo systemctl status docker;加入 Discord 获取支持"
         fi
     done
-    handle_error "命令失败：$cmd" "检查网络连接;验证命令参数;确保 Docker 服务运行"
 }
 
-# 确保目录存在并设置安全权限
+# 确保目录存在
 secure_directory() {
     local dir=$1
     if [ ! -d "$dir" ]; then
@@ -108,7 +108,7 @@ secure_directory() {
     chmod 755 "$dir"
 }
 
-# 验证输入格式
+# 验证输入
 validate_input() {
     local input=$1
     local field=$2
@@ -123,6 +123,25 @@ backup_bashrc() {
     if [ -f "$bashrc" ]; then
         cp "$bashrc" "$bashrc.bak-$(date +%F-%H-%M-%S)"
         log_message "已备份 $bashrc"
+    fi
+}
+
+# 检查网络
+check_network() {
+    log_message "检查网络连接..."
+    if ! ping -c 1 raw.githubusercontent.com >/dev/null 2>&1; then
+        handle_error "无法连接到 GitHub" "检查网络：ping raw.githubusercontent.com;使用代理或 VPN"
+    fi
+    log_message "✅ 网络连接正常。"
+}
+
+# 检查服务器状态
+check_server_status() {
+    log_message "检查 Soundness 服务器状态..."
+    if ! curl -s -I https://testnet.soundness.xyz >/dev/null; then
+        log_message "⚠️ 警告：Soundness 服务器可能不可用。"
+    else
+        log_message "✅ Soundness 服务器正常。"
     fi
 }
 
@@ -169,32 +188,36 @@ install_rust_cargo() {
     log_message "✅ Rust 和 Cargo 已安装：$(cargo --version)"
 }
 
+# 获取 soundnessup 版本
+get_soundnessup_version() {
+    local version=$(soundnessup version 2>/dev/null || soundnessup --version 2>/dev/null || echo "unknown")
+    echo "$version"
+}
+
 # 安装 soundnessup
 install_soundnessup() {
     log_message "安装 soundnessup..."
+    sudo rm -f /usr/local/bin/soundnessup /root/.local/bin/soundnessup /root/.soundness/bin/soundnessup
+    local install_script="install_soundnessup.sh"
+    retry_command "curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o $install_script" 3
+    chmod +x "$install_script"
+    retry_command "bash $install_script" 3
+    rm -f "$install_script"
+    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
     if ! command -v soundnessup >/dev/null 2>&1; then
-        local install_script="install_soundnessup.sh"
-        retry_command "curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install -o $install_script" 3
-        chmod +x "$install_script"
-        retry_command "bash $install_script" 3
-        rm -f "$install_script"
-        export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
-        if ! command -v soundnessup >/dev/null 2>&1; then
-            handle_error "soundnessup 安装失败" "检查安装路径：ls -l /usr/local/bin/soundnessup;验证 PATH：echo \$PATH;重新安装：curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
-        fi
-        log_message "✅ soundnessup 已安装：$(soundnessup --version)"
-    else
-        log_message "✅ soundnessup 已存在：$(soundnessup --version)"
+        handle_error "soundnessup 安装失败" "检查安装路径：ls -l /usr/local/bin/soundnessup;验证 PATH：echo \$PATH;重新安装：curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
     fi
-    retry_command "soundnessup update" 3
-    log_message "✅ Soundness CLI 已更新到最新版本。"
+    if ! soundnessup version >/dev/null 2>&1 && ! soundnessup --version >/dev/null 2>&1; then
+        log_message "⚠️ 警告：soundnessup version 命令不可用"
+    fi
+    log_message "✅ soundnessup 已安装：$(get_soundnessup_version)"
 }
 
 # 验证仓库完整性
 verify_repo() {
     local repo_dir="$SOUNDNESS_DIR"
     if [ ! -f "$repo_dir/Cargo.toml" ] || [ ! -f "$repo_dir/Dockerfile" ]; then
-        handle_error "仓库 $repo_dir 缺少必要文件（Cargo.toml 或 Dockerfile）" "检查网络连接;重新克隆仓库：git clone https://github.com/SoundnessLabs/soundness-layer.git"
+        handle_error "仓库 $repo_dir 缺少必要文件" "检查网络连接;重新克隆仓库：git clone https://github.com/SoundnessLabs/soundness-layer.git"
     fi
     log_message "✅ 仓库验证通过。"
 }
@@ -243,9 +266,9 @@ setup_ligero_internal() {
 install_docker_cli() {
     log_message "开始安装/更新 Soundness CLI..."
     check_requirements
+    check_network
     install_rust_cargo
     install_soundnessup
-
     if ! command -v docker >/dev/null 2>&1; then
         log_message "安装 Docker..."
         retry_command "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh" 3
@@ -258,7 +281,6 @@ install_docker_cli() {
         retry_command "sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose" 3
         sudo chmod +x /usr/local/bin/docker-compose
     fi
-
     if [ ! -d "$SOUNDNESS_DIR" ]; then
         log_message "克隆 Soundness CLI 仓库..."
         retry_command "git clone https://github.com/SoundnessLabs/soundness-layer.git ${SOUNDNESS_DIR}/.." 3
@@ -272,9 +294,16 @@ install_docker_cli() {
     verify_repo
     generate_docker_compose
     secure_directory "$SOUNDNESS_CONFIG_DIR"
-    log_message "构建 Docker 镜像..."
-    retry_command "docker-compose build" 3
-    log_message "✅ Soundness CLI 安装完成。"
+    log_message "更新 Soundness CLI..."
+    retry_command "soundnessup update" 3
+    if ! soundness-cli --help >/dev/null 2>&1; then
+        log_message "尝试重新安装 Soundness CLI..."
+        retry_command "soundnessup install" 3
+    fi
+    if ! soundness-cli --help >/dev/null 2>&1; then
+        handle_error "Soundness CLI 安装失败" "检查 soundnessup 日志;验证 Docker 服务;加入 Discord 获取支持"
+    fi
+    log_message "✅ Soundness CLI 安装完成：$(soundness-cli --version 2>/dev/null || echo 'unknown')"
 }
 
 # 生成密钥对
@@ -319,23 +348,19 @@ list_key_pairs() {
 # 验证并发送证明
 send_proof() {
     cd "$SOUNDNESS_DIR"
+    check_server_status
     log_message "准备发送证明..."
-
     if [ ! -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         handle_error "未找到 key_store.json" "先生成或导入密钥对（选项 2 或 3）"
     fi
     log_message "当前存储的密钥对："
     retry_command "docker-compose run --rm soundness-cli list-keys" 3
-
     echo "请输入完整的 soundness-cli send 命令，例如："
     echo "soundness-cli send --proof-file=\"proof.bin\" --elf-file=\"program.elf\" --key-name=\"andygan\" --proving-system=\"ligetron\" --payload='{\"program\": \"/path/to/wasm\", ...}' --game=\"8queens\""
     read -r -p "命令： " full_command
-
     if [ -z "$full_command" ]; then
         handle_error "命令不能为空" "提供完整的 send 命令"
     fi
-
-    # 解析命令参数
     proof_file=""
     elf_file=""
     key_name=""
@@ -357,15 +382,12 @@ send_proof() {
             *) handle_error "无效参数 $1" "检查命令格式" ;;
         esac
     done
-
     if [ -z "$proof_file" ] || [ -z "$key_name" ] || [ -z "$proving_system" ]; then
         handle_error "缺少必要参数" "提供 --proof-file、--key-name 和 --proving-system"
     fi
     if [ -z "$game" ] && [ -z "$elf_file" ]; then
         handle_error "必须提供 --game 或 --elf-file" "检查命令格式"
     fi
-
-    # 验证 payload JSON
     if [ -n "$payload" ]; then
         echo "$payload" | jq . >/dev/null 2>&1 || handle_error "payload JSON 格式无效" "检查 payload 格式：$payload"
         wasm_path=$(echo "$payload" | jq -r '.program')
@@ -390,8 +412,6 @@ send_proof() {
             secure_directory "$shader_path"
         fi
     fi
-
-    # 验证 ELF 文件
     if [ -n "$elf_file" ] && [ ! -f "$elf_file" ]; then
         if ! echo "$elf_file" | grep -qE '^[A-Za-z0-9+/=-_]{20,}$'; then
             log_message "下载 ELF 文件 $elf_file..."
@@ -408,32 +428,20 @@ send_proof() {
             [ ! -f "$elf_file" ] && handle_error "无法下载 ELF 文件 $elf_file" "检查网络;确认文件 URL;加入 Discord 获取支持"
         fi
     fi
-
-    # 验证 proof-file
     if [ -n "$proof_file" ] && [ ! -f "$proof_file" ] && ! echo "$proof_file" | grep -qE '^[A-Za-z0-9+/=-_]{20,}$'; then
         handle_error "proof-file $proof_file 无效" "检查文件是否存在或是否为有效的 Walrus Blob ID;访问 https://walruscan.io/blob/$proof_file"
     fi
-
-    # 验证 key-name
     key_exists=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 | grep -w "$key_name")
     [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "使用选项 3 或 6 导入密钥对;检查名称"
-
-    # 验证 proving-system
     case "$proving_system" in
         sp1|ligetron|risc0|noir|starknet|miden) ;;
         *) handle_error "不支持的 proving-system：$proving_system" "支持：sp1, ligetron, risc0, noir, starknet, miden" ;;
     esac
-
-    # 配置 ligero_internal
     setup_ligero_internal
-
-    # 构建 send 命令
     send_command="docker-compose run --rm soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
     [ -n "$payload" ] && send_command="$send_command --payload='$payload'"
     [ -n "$game" ] && send_command="$send_command --game=\"$game\""
-
-    # 执行 send 命令
     max_retries=3
     retry_count=0
     while [ $retry_count -lt $max_retries ]; do
