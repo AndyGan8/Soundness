@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.2
+# 版本：1.0.3
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,12 +16,12 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 LOG_FILE="/root/soundness-script.log"
-REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-script/main/VERSION"
+REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
 LANG=${LANG:-zh}
 
 # 检测操作系统
@@ -106,7 +106,6 @@ secure_directory() {
         mkdir -p "$dir"
     fi
     chmod 755 "$dir"
-    # 确保 key_store.json 有安全权限
     if [ -f "$dir/key_store.json" ]; then
         chmod 600 "$dir/key_store.json"
         log_message "已设置 $dir/key_store.json 权限为 600"
@@ -314,17 +313,24 @@ install_docker_cli() {
 generate_key_pair() {
     cd "$SOUNDNESS_DIR"
     read -p "请输入密钥对名称（例如 andygan）： " key_name
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
     validate_input "$key_name" "密钥对名称"
     secure_directory "$SOUNDNESS_CONFIG_DIR"
     log_message "生成密钥对：$key_name..."
-    output=$(retry_command "docker-compose run --rm soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+    else
+        output=$(retry_command "docker-compose run --rm -it soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+    fi
     if [ $? -eq 0 ]; then
         log_message "✅ 密钥对 $key_name 生成成功！"
         log_message "输出：$output"
+        echo "$output"
         log_message "请将公钥提交到 Discord #testnet-access 频道，格式：!access <your_public_key>"
         log_message "访问 https://discord.gg/soundnesslabs 获取支持。"
     else
-        handle_error "生成密钥对失败：$key_name" "检查 Docker 日志：docker logs <container_id>;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;加入 Discord 获取支持"
+        handle_error "生成密钥对失败：$key_name" "检查 Docker 日志：docker logs <container_id>;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确;加入 Discord 获取支持"
     fi
 }
 
@@ -333,25 +339,33 @@ import_key_pair() {
     cd "$SOUNDNESS_DIR"
     if [ -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         log_message "当前存储的密钥对："
-        output=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
         log_message "list-keys 输出：$output"
+        echo "$output"
     else
         log_message "未找到 key_store.json，可能是首次导入。"
     fi
     read -p "请输入密钥对名称（例如 andygan）： " key_name
     read -p "请输入助记词（24 个单词）： " mnemonic
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
     validate_input "$key_name" "密钥对名称"
     if [ -z "$mnemonic" ]; then
         handle_error "助记词不能为空" "提供有效的 24 单词助记词"
     fi
     secure_directory "$SOUNDNESS_CONFIG_DIR"
     log_message "导入密钥对：$key_name..."
-    output=$(retry_command "docker-compose run --rm soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+    else
+        output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+    fi
     if [ $? -eq 0 ]; then
         log_message "✅ 密钥对 $key_name 导入成功！"
         log_message "输出：$output"
+        echo "$output"
     else
-        handle_error "导入密钥对失败：$key_name" "检查助记词有效性;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;加入 Discord 获取支持"
+        handle_error "导入密钥对失败：$key_name" "检查助记词有效性;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确;加入 Discord 获取支持"
     fi
 }
 
@@ -359,13 +373,19 @@ import_key_pair() {
 list_key_pairs() {
     cd "$SOUNDNESS_DIR"
     log_message "列出所有存储的密钥对..."
-    output=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 2>&1)
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+    else
+        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+    fi
     if [ $? -eq 0 ]; then
         log_message "✅ 列出密钥对成功！"
         log_message "输出：$output"
         echo "$output"
     else
-        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;加入 Discord 获取支持"
+        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确;加入 Discord 获取支持"
     fi
 }
 
@@ -378,8 +398,15 @@ send_proof() {
         handle_error "未找到 key_store.json" "先生成或导入密钥对（选项 2 或 3）"
     fi
     log_message "当前存储的密钥对："
-    output=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 2>&1)
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+    else
+        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+    fi
     log_message "list-keys 输出：$output"
+    echo "$output"
     echo "请输入完整的 soundness-cli send 命令，例如："
     echo "soundness-cli send --proof-file=\"proof.bin\" --elf-file=\"program.elf\" --key-name=\"andygan\" --proving-system=\"ligetron\" --payload='{\"program\": \"/path/to/wasm\", ...}' --game=\"8queens\""
     read -r -p "命令： " full_command
@@ -456,17 +483,20 @@ send_proof() {
     if [ -n "$proof_file" ] && [ ! -f "$proof_file" ] && ! echo "$proof_file" | grep -qE '^[A-Za-z0-9+/=-_]{20,}$'; then
         handle_error "proof-file $proof_file 无效" "检查文件是否存在或是否为有效的 Walrus Blob ID;访问 https://walruscan.io/blob/$proof_file"
     fi
-    key_exists=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 | grep -w "$key_name")
+    key_exists=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 | grep -w "$key_name")
     [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "使用选项 3 或 6 导入密钥对;检查名称"
     case "$proving_system" in
         sp1|ligetron|risc0|noir|starknet|miden) ;;
         *) handle_error "不支持的 proving-system：$proving_system" "支持：sp1, ligetron, risc0, noir, starknet, miden" ;;
     esac
     setup_ligero_internal
-    send_command="docker-compose run --rm soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
+    send_command="docker-compose run --rm -it soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
     [ -n "$payload" ] && send_command="$send_command --payload='$payload'"
     [ -n "$game" ] && send_command="$send_command --game=\"$game\""
+    if [ -n "$password" ]; then
+        send_command="echo \"$password\" | $send_command"
+    fi
     max_retries=3
     retry_count=0
     while [ $retry_count -lt $max_retries ]; do
@@ -501,12 +531,21 @@ batch_import_keys() {
     log_message "准备批量导入密钥对..."
     if [ -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         log_message "当前存储的密钥对："
-        output=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 2>&1)
+        read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+        echo ""
+        if [ -n "$password" ]; then
+            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        else
+            output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+        fi
         log_message "list-keys 输出：$output"
+        echo "$output"
     fi
     echo "请输入助记词列表（每行格式：key_name:mnemonic，完成后按 Ctrl+D）"
     echo "或提供文本文件路径（格式同上）"
     read -p "输入方式（1-手动输入，2-文件路径）： " input_method
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
     if [ "$input_method" = "1" ]; then
         keys_input=$(cat)
     elif [ "$input_method" = "2" ]; then
@@ -529,7 +568,11 @@ batch_import_keys() {
         fi
         validate_input "$key_name" "密钥对名称"
         log_message "导入密钥对：$key_name..."
-        output=$(retry_command "docker-compose run --rm soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        if [ -n "$password" ]; then
+            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        else
+            output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        fi
         if [ $? -eq 0 ]; then
             log_message "✅ 密钥对 $key_name 导入成功！"
             ((success_count++))
@@ -550,11 +593,17 @@ delete_key_pair() {
         handle_error "未找到 key_store.json" "没有可删除的密钥对"
     fi
     log_message "当前存储的密钥对："
-    output=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 2>&1)
+    read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
+    echo ""
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+    else
+        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+    fi
     log_message "list-keys 输出：$output"
     read -p "请输入要删除的密钥对名称（例如 andygan）： " key_name
     validate_input "$key_name" "密钥对名称"
-    key_exists=$(retry_command "docker-compose run --rm soundness-cli list-keys" 3 | grep -w "$key_name")
+    key_exists=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 | grep -w "$key_name")
     [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "检查名称;使用选项 4 查看密钥对"
     log_message "⚠️ 警告：删除密钥对 $key_name 不可逆！"
     read -p "确认删除？(y/n)： " confirm
@@ -567,9 +616,13 @@ delete_key_pair() {
 
 # 检查脚本版本
 check_script_version() {
-    local remote_version=$(curl -s "$REMOTE_VERSION_URL" 2>/dev/null)
-    if [ -n "$remote_version" ] && [ "$remote_version" != "$SCRIPT_VERSION" ]; then
-        log_message "⚠️ 新版本 $remote_version 可用（当前版本：$SCRIPT_VERSION）。请从 https://github.com/SoundnessLabs/soundness-script 更新脚本。"
+    local remote_version=$(curl -s "$REMOTE_VERSION_URL" 2>/dev/null || echo "unknown")
+    if [ "$remote_version" = "unknown" ]; then
+        log_message "⚠️ 无法检查脚本版本，URL $REMOTE_VERSION_URL 不可用"
+    elif [ -n "$remote_version" ] && [ "$remote_version" != "$SCRIPT_VERSION" ]; then
+        log_message "⚠️ 新版本 $remote_version 可用（当前版本：$SCRIPT_VERSION）。请从 https://github.com/SoundnessLabs/soundness-layer 更新脚本。"
+    else
+        log_message "✅ 脚本版本 $SCRIPT_VERSION 为最新"
     fi
 }
 
