@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.5
+# 版本：1.0.6
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -414,63 +414,53 @@ send_proof() {
     if [ -z "$full_command" ]; then
         handle_error "命令不能为空" "提供完整的 send 命令"
     fi
-    proof_file=""
-    elf_file=""
-    key_name=""
-    proving_system=""
-    payload=""
-    game=""
-    eval set -- $(getopt -o p:e:k:s:d:g: --long proof-file:,elf-file:,key-name:,proving-system:,payload:,game: -- $full_command 2>/dev/null) || {
-        handle_error "命令解析失败" "检查命令格式，确保 --payload 使用双引号;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
-    }
-    while true; do
-        case "$1" in
-            -p|--proof-file) proof_file="$2"; shift 2 ;;
-            -e|--elf-file) elf_file="$2"; shift 2 ;;
-            -k|--key-name) key_name="$2"; shift 2 ;;
-            -s|--proving-system) proving_system="$2"; shift 2 ;;
-            -d|--payload) payload="$2"; shift 2 ;;
-            -g|--game) game="$2"; shift 2 ;;
-            --) shift; break ;;
-            *) handle_error "无效参数 $1" "检查命令格式，确保 --payload 使用双引号" ;;
-        esac
-    done
+    log_message "输入的命令：$full_command"
+    # 提取参数
+    proof_file=$(echo "$full_command" | grep -oE -- '--proof-file="[^"]+"' | cut -d'"' -f2)
+    elf_file=$(echo "$full_command" | grep -oE -- '--elf-file="[^"]+"' | cut -d'"' -f2)
+    key_name=$(echo "$full_command" | grep -oE -- '--key-name="[^"]+"' | cut -d'"' -f2)
+    proving_system=$(echo "$full_command" | grep -oE -- '--proving-system="[^"]+"' | cut -d'"' -f2)
+    game=$(echo "$full_command" | grep -oE -- '--game="[^"]+"' | cut -d'"' -f2)
+    # 提取 payload（匹配双引号包裹的 JSON）
+    payload=$(echo "$full_command" | grep -oE -- '--payload="[^"]*"' | cut -d'"' -f2)
     if [ -z "$proof_file" ] || [ -z "$key_name" ] || [ -z "$proving-system" ]; then
         handle_error "缺少必要参数" "提供 --proof-file、--key-name 和 --proving-system"
     fi
     if [ -z "$game" ] && [ -z "$elf_file" ]; then
         handle_error "必须提供 --game 或 --elf-file" "检查命令格式"
     fi
-    if [ -n "$payload" ]; then
-        # 检查是否使用双引号
-        if ! echo "$full_command" | grep -qE -- "--payload=\".*\""; then
-            handle_error "payload 必须使用双引号包裹" "将 --payload='...' 改为 --payload=\"...\";运行 'echo \"$payload\" | jq .' 检查 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
-        fi
-        echo "$payload" | jq . >/dev/null 2>&1 || {
-            log_message "无效 JSON：$payload"
-            handle_error "payload JSON 格式无效" "检查 JSON 语法（确保使用双引号、正确转义）;运行 'echo \"$payload\" | jq .' 检查;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
-        }
-        wasm_path=$(echo "$payload" | jq -r '.program')
-        shader_path=$(echo "$payload" | jq -r '.["shader-path"]')
-        if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
-            wasm_dir=$(dirname "$wasm_path")
-            secure_directory "$wasm_dir"
-            log_message "下载 WASM 文件 $wasm_path..."
-            wasm_urls=(
-                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.wasm"
-                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.wasm"
-            )
-            for url in "${wasm_urls[@]}"; do
-                if retry_command "curl -s -o \"$wasm_path\" \"$url\"" 3; then
-                    chmod 644 "$wasm_path"
-                    break
-                fi
-            done
-            [ ! -f "$wasm_path" ] && handle_error "无法下载 WASM 文件 $wasm_path" "检查网络;确认文件 URL;加入 Discord 获取支持"
-        fi
-        if [ -n "$shader_path" ] && [ "$shader_path" != "null" ]; then
-            secure_directory "$shader_path"
-        fi
+    if [ -z "$payload" ]; then
+        handle_error "缺少 --payload 参数" "提供 --payload，使用双引号包裹 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+    fi
+    # 检查双引号
+    if ! echo "$full_command" | grep -qE -- "--payload=\".*\""; then
+        handle_error "payload 必须使用双引号包裹" "将 --payload='...' 改为 --payload=\"...\";运行 'echo \"$payload\" | jq .' 检查 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+    fi
+    # 验证 JSON
+    echo "$payload" | jq . >/dev/null 2>&1 || {
+        log_message "无效 JSON：$payload"
+        handle_error "payload JSON 格式无效" "检查 JSON 语法（确保使用双引号、正确转义）;运行 'echo \"$payload\" | jq .' 检查;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+    }
+    wasm_path=$(echo "$payload" | jq -r '.program')
+    shader_path=$(echo "$payload" | jq -r '.["shader-path"]')
+    if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
+        wasm_dir=$(dirname "$wasm_path")
+        secure_directory "$wasm_dir"
+        log_message "下载 WASM 文件 $wasm_path..."
+        wasm_urls=(
+            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.wasm"
+            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.wasm"
+        )
+        for url in "${wasm_urls[@]}"; do
+            if retry_command "curl -s -o \"$wasm_path\" \"$url\"" 3; then
+                chmod 644 "$wasm_path"
+                break
+            fi
+        done
+        [ ! -f "$wasm_path" ] && handle_error "无法下载 WASM 文件 $wasm_path" "检查网络;确认文件 URL;加入 Discord 获取支持"
+    fi
+    if [ -n "$shader_path" ] && [ "$shader_path" != "null" ]; then
+        secure_directory "$shader_path"
     fi
     if [ -n "$elf_file" ] && [ ! -f "$elf_file" ]; then
         if ! echo "$elf_file" | grep -qE '^[A-Za-z0-9+/=-_]{20,}$'; then
