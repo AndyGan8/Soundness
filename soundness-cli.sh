@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.6
+# 版本：1.0.7
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -409,7 +409,7 @@ send_proof() {
     echo "$output"
     echo "请输入完整的 soundness-cli send 命令，例如："
     echo "soundness-cli send --proof-file=\"proof.bin\" --elf-file=\"program.elf\" --key-name=\"andygan\" --proving-system=\"ligetron\" --payload=\"{\\\"program\\\": \\\"/path/to/wasm\\\", ...}\" --game=\"8queens\""
-    echo "注意：--payload 必须使用双引号(\")包裹 JSON 字符串！"
+    echo "注意：--payload 必须使用双引号(\")包裹 JSON 字符串，单引号(')可能导致解析失败！"
     read -r -p "命令： " full_command
     if [ -z "$full_command" ]; then
         handle_error "命令不能为空" "提供完整的 send 命令"
@@ -421,8 +421,8 @@ send_proof() {
     key_name=$(echo "$full_command" | grep -oE -- '--key-name="[^"]+"' | cut -d'"' -f2)
     proving_system=$(echo "$full_command" | grep -oE -- '--proving-system="[^"]+"' | cut -d'"' -f2)
     game=$(echo "$full_command" | grep -oE -- '--game="[^"]+"' | cut -d'"' -f2)
-    # 提取 payload（匹配双引号包裹的 JSON）
-    payload=$(echo "$full_command" | grep -oE -- '--payload="[^"]*"' | cut -d'"' -f2)
+    # 提取 payload（支持单引号或双引号）
+    payload=$(echo "$full_command" | grep -oE -- "--payload=(\"[^\"]*\"|'[^']*')" | sed -E "s/--payload=(\"|')//g; s/(\"|')\$//g")
     if [ -z "$proof_file" ] || [ -z "$key_name" ] || [ -z "$proving-system" ]; then
         handle_error "缺少必要参数" "提供 --proof-file、--key-name 和 --proving-system"
     fi
@@ -430,19 +430,17 @@ send_proof() {
         handle_error "必须提供 --game 或 --elf-file" "检查命令格式"
     fi
     if [ -z "$payload" ]; then
-        handle_error "缺少 --payload 参数" "提供 --payload，使用双引号包裹 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+        handle_error "缺少 --payload 参数" "提供 --payload，使用双引号包裹 JSON;确保命令中包含 --payload;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
     fi
-    # 检查双引号
-    if ! echo "$full_command" | grep -qE -- "--payload=\".*\""; then
-        handle_error "payload 必须使用双引号包裹" "将 --payload='...' 改为 --payload=\"...\";运行 'echo \"$payload\" | jq .' 检查 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
-    fi
+    # 规范化 payload（将单引号转为双引号）
+    normalized_payload=$(echo "$payload" | sed "s/'/\"/g")
     # 验证 JSON
-    echo "$payload" | jq . >/dev/null 2>&1 || {
-        log_message "无效 JSON：$payload"
-        handle_error "payload JSON 格式无效" "检查 JSON 语法（确保使用双引号、正确转义）;运行 'echo \"$payload\" | jq .' 检查;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
+    echo "$normalized_payload" | jq . >/dev/null 2>&1 || {
+        log_message "无效 JSON：$normalized_payload"
+        handle_error "payload JSON 格式无效" "检查 JSON 语法（确保使用双引号、正确转义）;运行 'echo \"$normalized_payload\" | jq .' 检查;使用双引号包裹 JSON;参考文档：https://github.com/SoundnessLabs/soundness-layer/tree/main/soundness-cli"
     }
-    wasm_path=$(echo "$payload" | jq -r '.program')
-    shader_path=$(echo "$payload" | jq -r '.["shader-path"]')
+    wasm_path=$(echo "$normalized_payload" | jq -r '.program')
+    shader_path=$(echo "$normalized_payload" | jq -r '.["shader-path"]')
     if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
         wasm_dir=$(dirname "$wasm_path")
         secure_directory "$wasm_dir"
@@ -490,7 +488,7 @@ send_proof() {
     setup_ligero_internal
     send_command="docker-compose run --rm -it soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
-    [ -n "$payload" ] && send_command="$send_command --payload \"$payload\""
+    [ -n "$normalized_payload" ] && send_command="$send_command --payload \"$normalized_payload\""
     [ -n "$game" ] && send_command="$send_command --game \"$game\""
     if [ -n "$password" ]; then
         send_command="echo \"$password\" | $send_command"
