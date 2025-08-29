@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（无 Docker 版）
-# 版本：1.0.13
+# 版本：1.0.14
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup）
 # 2. 生成密钥对
@@ -16,13 +16,22 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.13"
+SCRIPT_VERSION="1.0.14"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 LOG_FILE="/root/soundness-script.log"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
 CACHE_DIR="/root/soundness-cache"
 LANG=${LANG:-zh}
+
+# 检查 Bash 版本
+check_bash_version() {
+    local bash_version=$(bash --version | head -n1 | grep -o '[0-9]\.[0-9]')
+    if [[ "${bash_version%.*}" -lt 4 ]]; then
+        handle_error "需要 Bash 4.0 或更高版本" "当前版本：$bash_version;升级 Bash：sudo apt-get install bash 或 sudo yum install bash"
+    fi
+    log_message "✅ Bash 版本：$bash_version"
+}
 
 # 检查 /tmp 目录状态
 check_tmp_dir() {
@@ -62,10 +71,11 @@ detect_os() {
     fi
 }
 
-# 日志记录
+# 日志记录（带行号）
 log_message() {
     local msg=$1
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $msg" >> "$LOG_FILE"
+    local line=${BASH_LINENO[0]}
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [行 $line] - $msg" >> "$LOG_FILE"
     print_message "$msg"
 }
 
@@ -207,7 +217,7 @@ install_rust_cargo() {
     if ! command -v cargo >/dev/null 2>&1; then
         log_message "安装 Rust 和 Cargo..."
         retry_command "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" 3
-        export PATH=$HOME/.cargo/bin:$PATH
+        export PATH="$HOME/.cargo/bin:$PATH"
         backup_bashrc
         if ! grep -q '.cargo/bin' /root/.bashrc; then
             echo "export PATH=\$HOME/.cargo/bin:\$PATH" >> /root/.bashrc
@@ -236,7 +246,7 @@ install_soundnessup() {
     chmod +x "$install_script"
     retry_command "bash $install_script" 3
     rm -f "$install_script"
-    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin
+    export PATH="$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin"
     if ! command -v soundnessup >/dev/null 2>&1; then
         handle_error "soundnessup 安装失败" "检查安装路径：ls -l /usr/local/bin/soundnessup;验证 PATH：echo \$PATH;重新安装：curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash"
     fi
@@ -727,10 +737,11 @@ EOF
 
 # 主函数
 main() {
+    check_bash_version
     cleanup_temp_files
     check_requirements
     check_script_version
-    export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin:$HOME/.cargo/bin
+    export PATH="$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin:$HOME/.cargo/bin"
     source /root/.bashrc 2>/dev/null || true
     while true; do
         show_menu
