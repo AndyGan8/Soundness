@@ -2,7 +2,7 @@
 
 # Soundness CLI 管理脚本
 # 日志文件
-LOG_FILE="soundness_cli_script.log"
+LOG_FILE="/root/soundness_cli_script.log"
 
 # 函数：记录日志
 log_message() {
@@ -61,10 +61,16 @@ ensure_soundnessup() {
 # 函数：确保 soundness-cli 可执行
 ensure_soundness_cli() {
     if ! command -v soundness-cli &> /dev/null; then
-        log_message "未找到 soundness-cli，请先运行选项 1 安装 Soundness CLI"
+        log_message "错误: 未找到 soundness-cli，请先运行选项 1 安装 Soundness CLI"
         exit 1
     fi
     log_message "soundness-cli 已可用：$(soundness-cli --version)"
+    # 初始化 ~/.soundness 目录
+    if [ ! -d "$HOME/.soundness" ]; then
+        log_message "初始化 ~/.soundness 目录..."
+        mkdir -p "$HOME/.soundness"
+        check_error "无法创建 ~/.soundness 目录"
+    fi
 }
 
 # 函数：从 JSON 文件提取助记词
@@ -103,6 +109,10 @@ install_cli() {
         return
     fi
     log_message "安装 Soundness CLI..."
+    # 安装依赖以避免 pkg-config 和 libssl-dev 问题
+    sudo apt-get update
+    sudo apt-get install -y pkg-config libssl-dev
+    check_error "依赖安装失败"
     soundnessup install
     check_error "Soundness CLI 安装失败"
     ensure_path
@@ -127,10 +137,20 @@ update_cli() {
     log_message "Soundness CLI 更新完成"
 }
 
-# 函数：生成密钥对
+# 函数：生成密钥对并提示 Discord 提交
 generate_key_pair() {
     log_message "步骤 3: 生成密钥对"
     ensure_soundness_cli
+    echo "生成密钥对前，请确认您是否已在 Soundness Labs Discord 获取 Onboarded 角色："
+    echo "1. 加入 Discord：https://discord.gg/soundnesslabs"
+    echo "2. 如果您有 Onboarded 角色，密钥对可能已在入职时生成，无需重新生成。"
+    echo "3. 如果您有邀请码，需生成新密钥对并在 Discord 的 #testnet-access 频道提交公钥。"
+    read -p "您是否已有 Onboarded 角色？（y/n）: " HAS_ONBOARDED
+    if [ "$HAS_ONBOARDED" = "y" ]; then
+        log_message "用户确认已有 Onboarded 角色，跳过密钥生成"
+        echo "您已有 Onboarded 角色，请使用现有密钥对（运行选项 5 列出密钥对）。"
+        return
+    fi
     read -p "请输入密钥对名称（例如 my-key）: " KEY_NAME
     if [ -z "$KEY_NAME" ]; then
         KEY_NAME="my-key"
@@ -138,10 +158,21 @@ generate_key_pair() {
     fi
     log_message "生成密钥对（名称: $KEY_NAME）..."
     echo '注意: 输入密码时，屏幕不会显示任何字符（为了安全）。'
-    script -q -c "soundness-cli generate-key --name $KEY_NAME" key_info.txt
+    script -q -c "soundness-cli generate-key --name $KEY_NAME" /root/key_info.txt
     check_error "密钥对生成失败"
-    log_message "密钥对生成成功，信息已保存到 /root/key_info.txt"
-    log_message "请妥善保存 key_info.txt 中的助记词和公钥！"
+    # 提取公钥
+    PUBLIC_KEY=$(grep "Public key:" /root/key_info.txt | awk -F": " '{print $2}' | tr -d '\n')
+    if [ -z "$PUBLIC_KEY" ]; then
+        log_message "错误: 无法从 key_info.txt 提取公钥"
+        exit 1
+    fi
+    log_message "密钥对生成成功，公钥: $PUBLIC_KEY"
+    log_message "密钥信息已保存到 /root/key_info.txt"
+    echo "密钥对生成成功，信息已保存到 /root/key_info.txt"
+    echo "请妥善保存助记词（在 /root/key_info.txt 中）！"
+    echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
+    echo "  !access $PUBLIC_KEY"
+    echo "等待 ✅ 确认后，您已注册测试网访问权限。"
 }
 
 # 函数：导入密钥对并自动生成 JSON 文件
@@ -182,12 +213,25 @@ import_key_pair() {
     check_error "密钥对导入失败"
     log_message "密钥对导入成功"
     echo "助记词已保存到 $JSON_FILE，请妥善保存！"
+    # 显示公钥并提示 Discord 提交
+    PUBLIC_KEY=$(soundness-cli list-keys | grep "$IMPORT_KEY_NAME" | awk '{print $NF}' | tr -d '\n')
+    if [ ! -z "$PUBLIC_KEY" ]; then
+        log_message "导入的密钥对公钥: $PUBLIC_KEY"
+        echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
+        echo "  !access $PUBLIC_KEY"
+        echo "等待 ✅ 确认后，您已注册测试网访问权限。"
+    fi
 }
 
 # 函数：列出密钥对
 list_key_pairs() {
     log_message "步骤 5: 列出所有密钥对"
     ensure_soundness_cli
+    if [ ! -f "$HOME/.soundness/key_store.json" ]; then
+        log_message "密钥存储文件 $HOME/.soundness/key_store.json 不存在，初始化为空..."
+        echo "{}" > "$HOME/.soundness/key_store.json"
+        check_error "无法初始化密钥存储文件"
+    fi
     soundness-cli list-keys
     check_error "列出密钥对失败"
     log_message "密钥对列表已显示"
@@ -197,6 +241,8 @@ list_key_pairs() {
 send_proof() {
     log_message "步骤 6: 验证并发送证明"
     ensure_soundness_cli
+    echo "请确保您已在 Soundness Labs Discord 的 #Soundness-Cockpit 频道赢得游戏并获取 Walrus Blob ID。"
+    echo "参考：https://soundness.xyz/testnet"
     read -p "请输入证明文件的 Walrus Blob ID: " PROOF_BLOB_ID
     read -p "请输入游戏名称（例如 8queens 或 tictactoe）: " GAME_NAME
     read -p "请输入密钥对名称（用于发送证明）: " PROOF_KEY_NAME
@@ -232,6 +278,14 @@ batch_import_keys() {
         check_error "从 $key_file 提取助记词失败"
         soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
         check_error "导入密钥文件 $key_file 失败"
+        # 显示公钥并提示 Discord 提交
+        PUBLIC_KEY=$(soundness-cli list-keys | grep "$KEY_NAME" | awk '{print $NF}' | tr -d '\n')
+        if [ ! -z "$PUBLIC_KEY" ]; then
+            log_message "导入的密钥对公钥: $PUBLIC_KEY"
+            echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
+            echo "  !access $PUBLIC_KEY"
+            echo "等待 ✅ 确认后，您已注册测试网访问权限。"
+        fi
     done
     log_message "批量导入密钥对完成"
 }
@@ -273,7 +327,7 @@ show_menu() {
     echo "Soundness CLI 管理菜单"
     echo "1. 安装 Soundness CLI（通过 soundnessup）"
     echo "2. 更新 Soundness CLI"
-    echo "3. 生成密钥对"
+    echo "3. 生成密钥对并提交到 Discord"
     echo "4. 导入密钥对（通过助记词）"
     echo "5. 列出密钥对"
     echo "6. 验证并发送证明"
@@ -283,6 +337,10 @@ show_menu() {
     echo "10. 退出"
     echo
 }
+
+# 初始化 PATH
+source /root/.bashrc 2>/dev/null
+export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
 
 # 主循环
 while true; do
