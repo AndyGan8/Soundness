@@ -24,18 +24,30 @@ check_rust() {
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         check_error "Rust 安装失败"
         source $HOME/.cargo/env
-        log_message "Rust 安装成功"
+        log_message "Rust 安装成功：$(rustc --version)"
     else
-        log_message "Rust 已安装"
+        log_message "Rust 已安装：$(rustc --version)"
+    fi
+}
+
+# 函数：确保 PATH 包含 Soundness CLI 路径
+ensure_path() {
+    if [[ ":$PATH:" != *":/usr/local/bin:$HOME/.soundness/bin:"* ]]; then
+        log_message "更新 PATH 以包含 Soundness CLI..."
+        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
+        echo 'export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin' >> /root/.bashrc
+        source /root/.bashrc
+        log_message "PATH 已更新：$PATH"
     fi
 }
 
 # 函数：确保 soundnessup 可执行
 ensure_soundnessup() {
     if ! command -v soundnessup &> /dev/null; then
-        log_message "未找到 soundnessup，尝试手动设置 PATH..."
-        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
-        source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
+        log_message "未找到 soundnessup，正在安装..."
+        curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
+        check_error "soundnessup 安装失败"
+        ensure_path
         if ! command -v soundnessup &> /dev/null; then
             log_message "错误: 无法找到 soundnessup，请检查安装路径"
             log_message "尝试查找 soundnessup 位置："
@@ -49,20 +61,10 @@ ensure_soundnessup() {
 # 函数：确保 soundness-cli 可执行
 ensure_soundness_cli() {
     if ! command -v soundness-cli &> /dev/null; then
-        log_message "未找到 soundness-cli，尝试安装..."
-        ensure_soundnessup
-        log_message "运行 soundnessup install..."
-        soundnessup install
-        check_error "soundness-cli 安装失败"
-        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
-        if ! command -v soundness-cli &> /dev/null; then
-            log_message "错误: 无法找到 soundness-cli，请检查安装路径"
-            log_message "尝试查找 soundness-cli 位置："
-            find / -name soundness-cli 2>/dev/null | tee -a "$LOG_FILE"
-            exit 1
-        fi
+        log_message "未找到 soundness-cli，请先运行选项 1 安装 Soundness CLI"
+        exit 1
     fi
-    log_message "soundness-cli 已可用：$(which soundness-cli)"
+    log_message "soundness-cli 已可用：$(soundness-cli --version)"
 }
 
 # 函数：从 JSON 文件提取助记词
@@ -75,7 +77,7 @@ extract_mnemonic() {
     fi
     if [ ! -f "$file" ]; then
         log_message "错误: 文件 $file 不存在"
-        echo "文件 $file 不存在。请运行选项 2 生成密钥对以获取助记词，或提供正确的文件路径。"
+        echo "文件 $file 不存在。请运行选项 3 生成密钥对以获取助记词，或提供正确的文件路径。"
         exit 1
     fi
     if [ ! -s "$file" ]; then
@@ -90,29 +92,44 @@ extract_mnemonic() {
     echo "$MNEMONIC"
 }
 
-# 函数：安装/更新 Soundness CLI
-install_update_cli() {
-    log_message "步骤 1: 安装/更新 Soundness CLI"
+# 函数：安装 Soundness CLI
+install_cli() {
+    log_message "步骤 1: 安装 Soundness CLI"
     check_rust
-    log_message "运行 soundnessup 安装程序..."
-    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
-    check_error "soundnessup 安装程序下载或运行失败"
-    log_message "更新 shell 环境..."
-    source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
-    export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
     ensure_soundnessup
+    if command -v soundness-cli &> /dev/null; then
+        log_message "Soundness CLI 已安装：$(soundness-cli --version)"
+        echo "Soundness CLI 已安装。如果需要更新，请选择选项 2。"
+        return
+    fi
     log_message "安装 Soundness CLI..."
     soundnessup install
     check_error "Soundness CLI 安装失败"
-    log_message "尝试更新 Soundness CLI 到最新版本..."
+    ensure_path
+    ensure_soundness_cli
+    log_message "Soundness CLI 安装完成"
+}
+
+# 函数：更新 Soundness CLI
+update_cli() {
+    log_message "步骤 2: 更新 Soundness CLI"
+    check_rust
+    ensure_soundnessup
+    if ! command -v soundness-cli &> /dev/null; then
+        log_message "错误: Soundness CLI 未安装，请先运行选项 1 安装"
+        exit 1
+    fi
+    log_message "更新 Soundness CLI 到最新版本..."
     soundnessup update
     check_error "Soundness CLI 更新失败"
-    log_message "Soundness CLI 安装/更新完成"
+    ensure_path
+    ensure_soundness_cli
+    log_message "Soundness CLI 更新完成"
 }
 
 # 函数：生成密钥对
 generate_key_pair() {
-    log_message "步骤 2: 生成密钥对"
+    log_message "步骤 3: 生成密钥对"
     ensure_soundness_cli
     read -p "请输入密钥对名称（例如 my-key）: " KEY_NAME
     if [ -z "$KEY_NAME" ]; then
@@ -123,13 +140,13 @@ generate_key_pair() {
     echo '注意: 输入密码时，屏幕不会显示任何字符（为了安全）。'
     script -q -c "soundness-cli generate-key --name $KEY_NAME" key_info.txt
     check_error "密钥对生成失败"
-    log_message "密钥对生成成功，信息已保存到 key_info.txt"
+    log_message "密钥对生成成功，信息已保存到 /root/key_info.txt"
     log_message "请妥善保存 key_info.txt 中的助记词和公钥！"
 }
 
-# 函数：导入密钥对
+# 函数：导入密钥对并自动生成 JSON 文件
 import_key_pair() {
-    log_message "步骤 3: 导入密钥对（通过助记词）"
+    log_message "步骤 4: 导入密钥对（通过助记词）"
     ensure_soundness_cli
     read -p "请输入要导入的密钥对名称（例如 my-key-import）: " IMPORT_KEY_NAME
     if [ -z "$IMPORT_KEY_NAME" ]; then
@@ -140,7 +157,7 @@ import_key_pair() {
     echo "您可以："
     echo "1. 直接输入助记词。"
     echo "2. 提供包含助记词的 JSON 文件路径（需包含 'mnemonic' 字段，例如 {'mnemonic': 'word1 word2 ...'}）。"
-    echo "3. 如果没有助记词，请选择选项 2 生成密钥对以获取助记词（保存在 key_info.txt）。"
+    echo "3. 如果没有助记词，请选择选项 3 生成密钥对以获取助记词（保存在 /root/key_info.txt）。"
     read -p "请输入助记词或 JSON 文件路径: " MNEMONIC_INPUT
     if [ -f "$MNEMONIC_INPUT" ]; then
         log_message "检测到文件输入，尝试从 $MNEMONIC_INPUT 提取助记词..."
@@ -151,18 +168,25 @@ import_key_pair() {
     fi
     if [ -z "$MNEMONIC" ]; then
         log_message "错误: 未提供有效的助记词"
-        echo "未提供助记词。请运行选项 2 生成密钥对，或提供有效的助记词。"
+        echo "未提供助记词。请运行选项 3 生成密钥对，或提供有效的助记词。"
         exit 1
     fi
+    # 自动生成 JSON 文件
+    JSON_FILE="/root/key_info_${IMPORT_KEY_NAME}.json"
+    log_message "保存助记词到 JSON 文件：$JSON_FILE"
+    echo "{\"mnemonic\": \"$MNEMONIC\"}" > "$JSON_FILE"
+    check_error "无法保存助记词到 $JSON_FILE"
+    log_message "助记词已保存到 $JSON_FILE"
     log_message "导入密钥对（名称: $IMPORT_KEY_NAME）..."
     soundness-cli import-key --name "$IMPORT_KEY_NAME" --mnemonic "$MNEMONIC"
     check_error "密钥对导入失败"
     log_message "密钥对导入成功"
+    echo "助记词已保存到 $JSON_FILE，请妥善保存！"
 }
 
 # 函数：列出密钥对
 list_key_pairs() {
-    log_message "步骤 4: 列出所有密钥对"
+    log_message "步骤 5: 列出所有密钥对"
     ensure_soundness_cli
     soundness-cli list-keys
     check_error "列出密钥对失败"
@@ -171,7 +195,7 @@ list_key_pairs() {
 
 # 函数：验证并发送证明
 send_proof() {
-    log_message "步骤 5: 验证并发送证明"
+    log_message "步骤 6: 验证并发送证明"
     ensure_soundness_cli
     read -p "请输入证明文件的 Walrus Blob ID: " PROOF_BLOB_ID
     read -p "请输入游戏名称（例如 8queens 或 tictactoe）: " GAME_NAME
@@ -185,7 +209,7 @@ send_proof() {
 
 # 函数：批量导入密钥对
 batch_import_keys() {
-    log_message "步骤 6: 批量导入密钥对"
+    log_message "步骤 7: 批量导入密钥对"
     ensure_soundness_cli
     read -p "请输入包含密钥文件的目录路径: " KEY_DIR
     if [ ! -d "$KEY_DIR" ]; then
@@ -214,7 +238,7 @@ batch_import_keys() {
 
 # 函数：删除密钥对
 delete_key_pair() {
-    log_message "步骤 7: 删除密钥对"
+    log_message "步骤 8: 删除密钥对"
     ensure_soundness_cli
     read -p "请输入要删除的密钥对名称: " DELETE_KEY_NAME
     if [ -z "$DELETE_KEY_NAME" ]; then
@@ -230,7 +254,7 @@ delete_key_pair() {
 
 # 函数：删除 Soundness CLI
 delete_cli() {
-    log_message "步骤 8: 删除 Soundness CLI"
+    log_message "步骤 9: 删除 Soundness CLI"
     read -p "确认删除 Soundness CLI？（输入 y 确认）: " CONFIRM
     if [ ! "$CONFIRM" = "y" ]; then
         log_message "取消删除 Soundness CLI"
@@ -247,53 +271,57 @@ delete_cli() {
 # 主菜单
 show_menu() {
     echo "Soundness CLI 管理菜单"
-    echo "1. 安装/更新 Soundness CLI（通过 soundnessup）"
-    echo "2. 生成密钥对"
-    echo "3. 导入密钥对（通过助记词）"
-    echo "4. 列出密钥对"
-    echo "5. 验证并发送证明"
-    echo "6. 批量导入密钥对"
-    echo "7. 删除密钥对"
-    echo "8. 删除 Soundness CLI"
-    echo "9. 退出"
+    echo "1. 安装 Soundness CLI（通过 soundnessup）"
+    echo "2. 更新 Soundness CLI"
+    echo "3. 生成密钥对"
+    echo "4. 导入密钥对（通过助记词）"
+    echo "5. 列出密钥对"
+    echo "6. 验证并发送证明"
+    echo "7. 批量导入密钥对"
+    echo "8. 删除密钥对"
+    echo "9. 删除 Soundness CLI"
+    echo "10. 退出"
     echo
 }
 
 # 主循环
 while true; do
     show_menu
-    read -p "请选择一个选项 (1-9): " choice
+    read -p "请选择一个选项 (1-10): " choice
     case $choice in
         1)
-            install_update_cli
+            install_cli
             ;;
         2)
-            generate_key_pair
+            update_cli
             ;;
         3)
-            import_key_pair
+            generate_key_pair
             ;;
         4)
-            list_key_pairs
+            import_key_pair
             ;;
         5)
-            send_proof
+            list_key_pairs
             ;;
         6)
-            batch_import_keys
+            send_proof
             ;;
         7)
-            delete_key_pair
+            batch_import_keys
             ;;
         8)
-            delete_cli
+            delete_key_pair
             ;;
         9)
+            delete_cli
+            ;;
+        10)
             log_message "脚本执行完成，退出"
             exit 0
             ;;
         *)
-            echo "无效选项，请选择 1-9"
+            echo "无效选项，请选择 1-10"
             ;;
     esac
     echo
