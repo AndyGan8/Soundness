@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.9
+# 版本：1.0.10
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.9"
+SCRIPT_VERSION="1.0.10"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -24,6 +24,13 @@ LOG_FILE="/root/soundness-script.log"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
 CACHE_DIR="/root/soundness-cache"
 LANG=${LANG:-zh}
+
+# 清理临时文件
+cleanup_temp_files() {
+    log_message "清理临时文件..."
+    find /tmp -maxdepth 1 -name 'soundness.*' -type f -delete 2>/dev/null
+    log_message "✅ 临时文件清理完成。"
+}
 
 # 检测操作系统
 detect_os() {
@@ -71,6 +78,7 @@ handle_error() {
     log_message "建议："
     echo "$suggestions" | sed 's/;/\n  - /g'
     log_message "加入 Discord（https://discord.gg/soundnesslabs）获取支持。"
+    cleanup_temp_files
     exit 1
 }
 
@@ -345,6 +353,7 @@ generate_key_pair() {
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "生成密钥对：$key_name..."
     if [ -n "$password" ]; then
@@ -373,6 +382,7 @@ import_key_pair() {
         fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
+        log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
             output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
         else
@@ -395,6 +405,7 @@ import_key_pair() {
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "导入密钥对：$key_name..."
     if [ -n "$password" ]; then
@@ -455,7 +466,7 @@ send_proof() {
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
     fi
@@ -585,7 +596,7 @@ send_proof() {
         if [ ! -f "$temp_file" ]; then
             handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
         fi
-        send_command="cat \"$temp_file\" | $send_command"
+        send_command="echo \"$password\" | $send_command"
     fi
 
     # 执行并处理响应
@@ -597,6 +608,7 @@ send_proof() {
         exit_code=$?
         if [ -n "$temp_file" ]; then
             rm -f "$temp_file"
+            log_message "已清理临时文件：$temp_file"
         fi
         if [ $exit_code -eq 0 ]; then
             log_message "✅ 证明发送成功！"
@@ -645,6 +657,7 @@ batch_import_keys() {
         fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
+        log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
             output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
         else
@@ -662,6 +675,7 @@ batch_import_keys() {
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     if [ "$input_method" = "1" ]; then
         keys_input=$(cat)
     elif [ "$input_method" = "2" ]; then
@@ -715,6 +729,7 @@ delete_key_pair() {
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
         output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
@@ -771,6 +786,7 @@ EOF
 
 # 主函数
 main() {
+    cleanup_temp_files
     check_requirements
     check_script_version
     export PATH=$PATH:/usr/local/bin:/root/.local/bin:/root/.soundness/bin:$HOME/.cargo/bin
@@ -785,7 +801,7 @@ main() {
             5) send_proof ;;
             6) batch_import_keys ;;
             7) delete_key_pair ;;
-            8) log_message "退出脚本。"; exit 0 ;;
+            8) log_message "退出脚本。"; cleanup_temp_files; exit 0 ;;
             *) print_message "invalid_option" ;;
         esac
         echo ""
@@ -793,7 +809,7 @@ main() {
     done
 }
 
-# 清理敏感历史记录
-trap 'history -c && history -w' EXIT
+# 清理敏感历史记录和临时文件
+trap 'cleanup_temp_files; history -c && history -w' EXIT
 
 main
