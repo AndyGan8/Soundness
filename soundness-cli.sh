@@ -611,5 +611,6 @@ main() {
         echo ""
         read -p "按 Enter 键返回菜单..."
     done
-}main
+}
+main
 
