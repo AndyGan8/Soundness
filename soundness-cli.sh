@@ -41,6 +41,21 @@ ensure_path() {
     fi
 }
 
+# 函数：修复 dpkg 和 GRUB 问题
+fix_dpkg_grub() {
+    log_message "检查并修复 dpkg 和 GRUB 问题..."
+    sudo dpkg --configure -a
+    check_error "dpkg 配置修复失败"
+    sudo apt-get install -f
+    check_error "apt-get 修复失败"
+    df -h /boot | tee -a "$LOG_FILE"
+    sudo apt-get autoremove --purge
+    sudo apt-get autoclean
+    sudo update-grub
+    check_error "GRUB 更新失败"
+    log_message "dpkg 和 GRUB 修复完成"
+}
+
 # 函数：确保 soundnessup 可执行
 ensure_soundnessup() {
     if ! command -v soundnessup &> /dev/null; then
@@ -120,6 +135,7 @@ extract_mnemonic() {
 install_cli() {
     log_message "步骤 1: 安装 Soundness CLI"
     check_rust
+    fix_dpkg_grub
     ensure_soundnessup
     if command -v soundness-cli &> /dev/null; then
         log_message "Soundness CLI 已安装：$(soundness-cli --version)"
@@ -127,9 +143,8 @@ install_cli() {
         return
     fi
     log_message "安装 Soundness CLI..."
-    # 安装依赖以避免 pkg-config 和 libssl-dev 问题
     sudo apt-get update
-    sudo apt-get install -y pkg-config libssl-dev
+    sudo apt-get install -y pkg-config libssl-dev jq
     check_error "依赖安装失败"
     soundnessup install
     check_error "Soundness CLI 安装失败"
@@ -142,6 +157,7 @@ install_cli() {
 update_cli() {
     log_message "步骤 2: 更新 Soundness CLI"
     check_rust
+    fix_dpkg_grub
     ensure_soundnessup
     if ! command -v soundness-cli &> /dev/null; then
         log_message "错误: Soundness CLI 未安装，请先运行选项 1 安装"
@@ -149,7 +165,7 @@ update_cli() {
     fi
     log_message "更新 Soundness CLI 到最新版本..."
     sudo apt-get update
-    sudo apt-get install -y pkg-config libssl-dev
+    sudo apt-get install -y pkg-config libssl-dev jq
     check_error "依赖安装失败"
     soundnessup update
     check_error "Soundness CLI 更新失败"
@@ -216,11 +232,6 @@ import_key_pair() {
 list_key_pairs() {
     log_message "步骤 5: 列出所有密钥对"
     ensure_soundness_cli
-    if [ ! -f "$HOME/.soundness/key_store.json" ]; then
-        log_message "密钥存储文件 $HOME/.soundness/key_store.json 不存在，初始化为空..."
-        echo "{}" > "$HOME/.soundness/key_store.json"
-        check_error "无法初始化密钥存储文件"
-    fi
     soundness-cli list-keys
     check_error "列出密钥对失败"
     log_message "密钥对列表已显示"
