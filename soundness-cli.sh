@@ -75,6 +75,7 @@ extract_mnemonic() {
     fi
     if [ ! -f "$file" ]; then
         log_message "错误: 文件 $file 不存在"
+        echo "文件 $file 不存在。请运行选项 2 生成密钥对以获取助记词，或提供正确的文件路径。"
         exit 1
     fi
     if [ ! -s "$file" ]; then
@@ -128,14 +129,19 @@ generate_key_pair() {
 
 # 函数：导入密钥对
 import_key_pair() {
-    log_message "步骤 3: 导入密钥对"
+    log_message "步骤 3: 导入密钥对（通过助记词）"
     ensure_soundness_cli
     read -p "请输入要导入的密钥对名称（例如 my-key-import）: " IMPORT_KEY_NAME
     if [ -z "$IMPORT_KEY_NAME" ]; then
         IMPORT_KEY_NAME="my-key-import"
         log_message "未提供导入密钥名称，使用默认名称: $IMPORT_KEY_NAME"
     fi
-    read -p "请输入助记词（或提供包含助记词的 JSON 文件路径，例如 key_store.json）： " MNEMONIC_INPUT
+    echo "导入密钥对需要助记词（通常为 12 或 24 个单词，例如 'word1 word2 word3 ...'）。"
+    echo "您可以："
+    echo "1. 直接输入助记词。"
+    echo "2. 提供包含助记词的 JSON 文件路径（需包含 'mnemonic' 字段，例如 {'mnemonic': 'word1 word2 ...'}）。"
+    echo "3. 如果没有助记词，请选择选项 2 生成密钥对以获取助记词（保存在 key_info.txt）。"
+    read -p "请输入助记词或 JSON 文件路径: " MNEMONIC_INPUT
     if [ -f "$MNEMONIC_INPUT" ]; then
         log_message "检测到文件输入，尝试从 $MNEMONIC_INPUT 提取助记词..."
         MNEMONIC=$(extract_mnemonic "$MNEMONIC_INPUT")
@@ -145,6 +151,7 @@ import_key_pair() {
     fi
     if [ -z "$MNEMONIC" ]; then
         log_message "错误: 未提供有效的助记词"
+        echo "未提供助记词。请运行选项 2 生成密钥对，或提供有效的助记词。"
         exit 1
     fi
     log_message "导入密钥对（名称: $IMPORT_KEY_NAME）..."
@@ -183,18 +190,24 @@ batch_import_keys() {
     read -p "请输入包含密钥文件的目录路径: " KEY_DIR
     if [ ! -d "$KEY_DIR" ]; then
         log_message "错误: 目录 $KEY_DIR 不存在"
+        echo "目录 $KEY_DIR 不存在。请提供有效的目录路径。"
         exit 1
     fi
     log_message "批量导入密钥对（目录: $KEY_DIR）..."
-    for key_file in "$KEY_DIR"/*.json; do
-        if [ -f "$key_file" ]; then
-            KEY_NAME=$(basename "$key_file" .json)
-            log_message "导入密钥文件: $key_file（名称: $KEY_NAME）"
-            MNEMONIC=$(extract_mnemonic "$key_file")
-            check_error "从 $key_file 提取助记词失败"
-            soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
-            check_error "导入密钥文件 $key_file 失败"
-        fi
+    shopt -s nullglob
+    json_files=("$KEY_DIR"/*.json)
+    if [ ${#json_files[@]} -eq 0 ]; then
+        log_message "错误: 目录 $KEY_DIR 中没有 JSON 文件"
+        echo "目录 $KEY_DIR 中没有 JSON 文件。请确保目录包含有效的 JSON 文件（包含 'mnemonic' 字段）。"
+        exit 1
+    fi
+    for key_file in "${json_files[@]}"; do
+        KEY_NAME=$(basename "$key_file" .json)
+        log_message "导入密钥文件: $key_file（名称: $KEY_NAME）"
+        MNEMONIC=$(extract_mnemonic "$key_file")
+        check_error "从 $key_file 提取助记词失败"
+        soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
+        check_error "导入密钥文件 $key_file 失败"
     done
     log_message "批量导入密钥对完成"
 }
@@ -206,6 +219,7 @@ delete_key_pair() {
     read -p "请输入要删除的密钥对名称: " DELETE_KEY_NAME
     if [ -z "$DELETE_KEY_NAME" ]; then
         log_message "错误: 未提供要删除的密钥名称"
+        echo "未提供密钥名称。请提供有效的密钥对名称。"
         exit 1
     fi
     log_message "删除密钥对（名称: $DELETE_KEY_NAME）..."
@@ -235,7 +249,7 @@ show_menu() {
     echo "Soundness CLI 管理菜单"
     echo "1. 安装/更新 Soundness CLI（通过 soundnessup）"
     echo "2. 生成密钥对"
-    echo "3. 导入密钥对"
+    echo "3. 导入密钥对（通过助记词）"
     echo "4. 列出密钥对"
     echo "5. 验证并发送证明"
     echo "6. 批量导入密钥对"
