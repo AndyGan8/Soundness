@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.11
+# 版本：1.0.12
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.11"
+SCRIPT_VERSION="1.0.12"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -32,8 +32,8 @@ check_tmp_dir() {
     if [ ! -d "$tmp_dir" ] || [ ! -w "$tmp_dir" ]; then
         handle_error "无法访问 $tmp_dir 目录" "检查目录是否存在：ls -ld $tmp_dir;检查权限：chmod 1777 $tmp_dir;尝试使用 /var/tmp：export TMPDIR=/var/tmp"
     fi
-    local disk_space=$(df -h "$tmp_dir" | awk 'NR==2 {print $4}')
-    if [ -z "$disk_space" ] || [ "$(echo "$disk_space" | grep -o '[0-9]\+') -lt 10" ]; then
+    local disk_space=$(df -h "$tmp_dir" | awk 'NR==2 {print $4}' | grep -o '[0-9]\+[MG]' || echo "0")
+    if [ -z "$disk_space" ] || [ "${disk_space%[MG]}" -lt 10 ]; then
         handle_error "/tmp 目录空间不足" "检查磁盘空间：df -h $tmp_dir;清理临时文件：rm -f $tmp_dir/soundness.*"
     fi
     log_message "✅ /tmp 目录正常：空间 $disk_space，权限 $(ls -ld "$tmp_dir")"
@@ -220,7 +220,7 @@ install_rust_cargo() {
             echo "export PATH=\$HOME/.cargo/bin:\$PATH" >> /root/.bashrc
             log_message "已将 Cargo PATH 写入 /root/.bashrc"
         fi
-        source /root/.bashrc
+        source /root/.bashrc 2>/dev/null || true
     fi
     if ! cargo --version >/dev/null 2>&1; then
         handle_error "Cargo 安装失败" "检查安装路径：ls -l /root/.cargo/bin/cargo;验证 PATH：echo \$PATH;重新安装 Rust：curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -y"
@@ -584,7 +584,7 @@ send_proof() {
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.elf"
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.elf"
             )
-            for url in "${wasm_urls[@]}"; do
+            for url in "${elf_urls[@]}"; do
                 if retry_command "curl -s -o \"$elf_file\" \"$url\"" 3; then
                     chmod 644 "$elf_file"
                     cp "$elf_file" "$cached_elf"
