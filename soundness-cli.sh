@@ -46,6 +46,49 @@ ensure_soundnessup() {
     log_message "soundnessup 已可用：$(which soundnessup)"
 }
 
+# 函数：确保 soundness-cli 可执行
+ensure_soundness_cli() {
+    if ! command -v soundness-cli &> /dev/null; then
+        log_message "未找到 soundness-cli，尝试安装..."
+        ensure_soundnessup
+        log_message "运行 soundnessup install..."
+        soundnessup install
+        check_error "soundness-cli 安装失败"
+        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
+        if ! command -v soundness-cli &> /dev/null; then
+            log_message "错误: 无法找到 soundness-cli，请检查安装路径"
+            log_message "尝试查找 soundness-cli 位置："
+            find / -name soundness-cli 2>/dev/null | tee -a "$LOG_FILE"
+            exit 1
+        fi
+    fi
+    log_message "soundness-cli 已可用：$(which soundness-cli)"
+}
+
+# 函数：从 JSON 文件提取助记词
+extract_mnemonic() {
+    local file="$1"
+    if ! command -v jq &> /dev/null; then
+        log_message "错误: 需要安装 jq 来解析 JSON 文件"
+        log_message "请运行 'sudo apt-get install jq' 或手动提供助记词"
+        exit 1
+    fi
+    if [ ! -f "$file" ]; then
+        log_message "错误: 文件 $file 不存在"
+        exit 1
+    fi
+    if [ ! -s "$file" ]; then
+        log_message "错误: 文件 $file 为空"
+        exit 1
+    fi
+    MNEMONIC=$(jq -r '.mnemonic' "$file" 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$MNEMONIC" ]; then
+        log_message "错误: 无法从 $file 提取助记词，或文件格式不正确（需要包含 'mnemonic' 字段）"
+        exit 1
+    fi
+    echo "$MNEMONIC"
+}
+
 # 函数：安装/更新 Soundness CLI
 install_update_cli() {
     log_message "步骤 1: 安装/更新 Soundness CLI"
@@ -69,6 +112,7 @@ install_update_cli() {
 # 函数：生成密钥对
 generate_key_pair() {
     log_message "步骤 2: 生成密钥对"
+    ensure_soundness_cli
     read -p "请输入密钥对名称（例如 my-key）: " KEY_NAME
     if [ -z "$KEY_NAME" ]; then
         KEY_NAME="my-key"
@@ -85,18 +129,26 @@ generate_key_pair() {
 # 函数：导入密钥对
 import_key_pair() {
     log_message "步骤 3: 导入密钥对"
+    ensure_soundness_cli
     read -p "请输入要导入的密钥对名称（例如 my-key-import）: " IMPORT_KEY_NAME
     if [ -z "$IMPORT_KEY_NAME" ]; then
         IMPORT_KEY_NAME="my-key-import"
         log_message "未提供导入密钥名称，使用默认名称: $IMPORT_KEY_NAME"
     fi
-    read -p "请输入密钥文件的路径（例如 key_store.json）: " KEY_FILE
-    if [ ! -f "$KEY_FILE" ]; then
-        log_message "错误: 密钥文件 $KEY_FILE 不存在"
+    read -p "请输入助记词（或提供包含助记词的 JSON 文件路径，例如 key_store.json）： " MNEMONIC_INPUT
+    if [ -f "$MNEMONIC_INPUT" ]; then
+        log_message "检测到文件输入，尝试从 $MNEMONIC_INPUT 提取助记词..."
+        MNEMONIC=$(extract_mnemonic "$MNEMONIC_INPUT")
+        check_error "从文件提取助记词失败"
+    else
+        MNEMONIC="$MNEMONIC_INPUT"
+    fi
+    if [ -z "$MNEMONIC" ]; then
+        log_message "错误: 未提供有效的助记词"
         exit 1
     fi
     log_message "导入密钥对（名称: $IMPORT_KEY_NAME）..."
-    soundness-cli import-key --name "$IMPORT_KEY_NAME" --file "$KEY_FILE"
+    soundness-cli import-key --name "$IMPORT_KEY_NAME" --mnemonic "$MNEMONIC"
     check_error "密钥对导入失败"
     log_message "密钥对导入成功"
 }
@@ -104,6 +156,7 @@ import_key_pair() {
 # 函数：列出密钥对
 list_key_pairs() {
     log_message "步骤 4: 列出所有密钥对"
+    ensure_soundness_cli
     soundness-cli list-keys
     check_error "列出密钥对失败"
     log_message "密钥对列表已显示"
@@ -112,6 +165,7 @@ list_key_pairs() {
 # 函数：验证并发送证明
 send_proof() {
     log_message "步骤 5: 验证并发送证明"
+    ensure_soundness_cli
     read -p "请输入证明文件的 Walrus Blob ID: " PROOF_BLOB_ID
     read -p "请输入游戏名称（例如 8queens 或 tictactoe）: " GAME_NAME
     read -p "请输入密钥对名称（用于发送证明）: " PROOF_KEY_NAME
@@ -125,6 +179,7 @@ send_proof() {
 # 函数：批量导入密钥对
 batch_import_keys() {
     log_message "步骤 6: 批量导入密钥对"
+    ensure_soundness_cli
     read -p "请输入包含密钥文件的目录路径: " KEY_DIR
     if [ ! -d "$KEY_DIR" ]; then
         log_message "错误: 目录 $KEY_DIR 不存在"
@@ -135,7 +190,9 @@ batch_import_keys() {
         if [ -f "$key_file" ]; then
             KEY_NAME=$(basename "$key_file" .json)
             log_message "导入密钥文件: $key_file（名称: $KEY_NAME）"
-            soundness-cli import-key --name "$KEY_NAME" --file "$key_file"
+            MNEMONIC=$(extract_mnemonic "$key_file")
+            check_error "从 $key_file 提取助记词失败"
+            soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
             check_error "导入密钥文件 $key_file 失败"
         fi
     done
@@ -145,6 +202,7 @@ batch_import_keys() {
 # 函数：删除密钥对
 delete_key_pair() {
     log_message "步骤 7: 删除密钥对"
+    ensure_soundness_cli
     read -p "请输入要删除的密钥对名称: " DELETE_KEY_NAME
     if [ -z "$DELETE_KEY_NAME" ]; then
         log_message "错误: 未提供要删除的密钥名称"
@@ -160,16 +218,16 @@ delete_key_pair() {
 delete_cli() {
     log_message "步骤 8: 删除 Soundness CLI"
     read -p "确认删除 Soundness CLI？（输入 y 确认）: " CONFIRM
-    if [ "$CONFIRM" = "y" ]; then
-        log_message "删除 Soundness CLI..."
-        rm -f /usr/local/bin/soundness-cli
-        rm -f /usr/local/bin/soundnessup
-        rm -rf $HOME/.soundness
-        check_error "Soundness CLI 删除失败"
-        log_message "Soundness CLI 删除成功"
-    else
+    if [ ! "$CONFIRM" = "y" ]; then
         log_message "取消删除 Soundness CLI"
+        return
     fi
+    log_message "删除 Soundness CLI..."
+    rm -f /usr/local/bin/soundness-cli
+    rm -f /usr/local/bin/soundnessup
+    rm -rf $HOME/.soundness
+    check_error "Soundness CLI 删除失败"
+    log_message "Soundness CLI 删除成功"
 }
 
 # 主菜单
