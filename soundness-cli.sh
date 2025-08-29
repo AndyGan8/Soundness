@@ -83,10 +83,10 @@ EOF
         cat << EOF > Dockerfile
 FROM rust:slim
 WORKDIR /app
-COPY ./soundness-cli /app
 RUN apt-get update && apt-get install -y --no-install-recommends \\
-    libssl3 ca-certificates && \\
+    pkg-config libssl-dev ca-certificates && \\
     rm -rf /var/lib/apt/lists/*
+COPY ./soundness-cli /app
 RUN cargo install --path .
 ENTRYPOINT ["soundness-cli"]
 EOF
