@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.10
+# 版本：1.0.11
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,7 +16,7 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.10"
+SCRIPT_VERSION="1.0.11"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
@@ -25,10 +25,25 @@ REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-la
 CACHE_DIR="/root/soundness-cache"
 LANG=${LANG:-zh}
 
+# 检查 /tmp 目录状态
+check_tmp_dir() {
+    log_message "检查 /tmp 目录状态..."
+    local tmp_dir="${TMPDIR:-/tmp}"
+    if [ ! -d "$tmp_dir" ] || [ ! -w "$tmp_dir" ]; then
+        handle_error "无法访问 $tmp_dir 目录" "检查目录是否存在：ls -ld $tmp_dir;检查权限：chmod 1777 $tmp_dir;尝试使用 /var/tmp：export TMPDIR=/var/tmp"
+    fi
+    local disk_space=$(df -h "$tmp_dir" | awk 'NR==2 {print $4}')
+    if [ -z "$disk_space" ] || [ "$(echo "$disk_space" | grep -o '[0-9]\+') -lt 10" ]; then
+        handle_error "/tmp 目录空间不足" "检查磁盘空间：df -h $tmp_dir;清理临时文件：rm -f $tmp_dir/soundness.*"
+    fi
+    log_message "✅ /tmp 目录正常：空间 $disk_space，权限 $(ls -ld "$tmp_dir")"
+}
+
 # 清理临时文件
 cleanup_temp_files() {
     log_message "清理临时文件..."
-    find /tmp -maxdepth 1 -name 'soundness.*' -type f -delete 2>/dev/null
+    local tmp_dir="${TMPDIR:-/tmp}"
+    find "$tmp_dir" -maxdepth 1 -name 'soundness.*' -type f -delete 2>/dev/null
     log_message "✅ 临时文件清理完成。"
 }
 
@@ -330,10 +345,15 @@ install_docker_cli() {
 
 # 安全输入密码
 secure_password_input() {
-    local temp_file=$(mktemp /tmp/soundness.XXXXXX)
-    if [ ! -f "$temp_file" ]; then
-        handle_error "无法创建临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
-    fi
+    check_tmp_dir
+    local tmp_dir="${TMPDIR:-/tmp}"
+    local temp_file
+    temp_file=$(mktemp "$tmp_dir/soundness.XXXXXX" 2>/dev/null) || {
+        handle_error "mktemp 命令失败" "检查 /tmp 目录：ls -ld $tmp_dir;检查磁盘空间：df -h $tmp_dir;尝试使用 /var/tmp：export TMPDIR=/var/tmp"
+    }
+    if [ ! -f "$temp_file" ] || [ ! -w "$temp_file" ]; then
+        handle_error "无法创建或写入临时密码文件 $temp_file" "检查磁盘空间：df -h $tmp_dir;检查权限：ls -ld $tmp_dir;尝试使用 /var/tmp：export TMPDIR=/var/tmp"
+    }
     read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
     echo ""
     echo "$password" > "$temp_file"
@@ -349,7 +369,7 @@ generate_key_pair() {
     validate_input "$key_name" "密钥对名称"
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
@@ -357,7 +377,7 @@ generate_key_pair() {
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "生成密钥对：$key_name..."
     if [ -n "$password" ]; then
-        output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
     fi
@@ -378,13 +398,13 @@ import_key_pair() {
         log_message "当前存储的密钥对："
         temp_file=$(secure_password_input)
         if [ ! -f "$temp_file" ]; then
-            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
         fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
         log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
-            output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
         else
             output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
         fi
@@ -401,7 +421,7 @@ import_key_pair() {
     fi
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
@@ -409,7 +429,7 @@ import_key_pair() {
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "导入密钥对：$key_name..."
     if [ -n "$password" ]; then
-        output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
     fi
@@ -428,13 +448,13 @@ list_key_pairs() {
     log_message "列出所有存储的密钥对..."
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
     fi
@@ -460,7 +480,7 @@ send_proof() {
     log_message "当前存储的密钥对："
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
@@ -564,7 +584,7 @@ send_proof() {
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.elf"
                 "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.elf"
             )
-            for url in "${elf_urls[@]}"; do
+            for url in "${wasm_urls[@]}"; do
                 if retry_command "curl -s -o \"$elf_file\" \"$url\"" 3; then
                     chmod 644 "$elf_file"
                     cp "$elf_file" "$cached_elf"
@@ -594,7 +614,7 @@ send_proof() {
     if [ -n "$password" ]; then
         temp_file=$(secure_password_input)
         if [ ! -f "$temp_file" ]; then
-            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
         fi
         send_command="echo \"$password\" | $send_command"
     fi
@@ -653,13 +673,13 @@ batch_import_keys() {
         log_message "当前存储的密钥对："
         temp_file=$(secure_password_input)
         if [ ! -f "$temp_file" ]; then
-            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
         fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
         log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
-            output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
         else
             output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
         fi
@@ -671,7 +691,7 @@ batch_import_keys() {
     read -p "输入方式（1-手动输入，2-文件路径）： " input_method
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
@@ -699,7 +719,7 @@ batch_import_keys() {
         validate_input "$key_name" "密钥对名称"
         log_message "导入密钥对：$key_name..."
         if [ -n "$password" ]; then
-            output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
         else
             output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
         fi
@@ -725,13 +745,13 @@ delete_key_pair() {
     log_message "当前存储的密钥对："
     temp_file=$(secure_password_input)
     if [ ! -f "$temp_file" ]; then
-        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
     fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
     fi
