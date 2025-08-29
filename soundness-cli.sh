@@ -1,44 +1,39 @@
 #!/bin/bash
 clear
 
-# Soundness CLI 一键脚本（无 Docker 版，简化版）
-# 版本：1.0.15
+# Soundness CLI 一键脚本（无 Docker 版，修复版）
+# 版本：1.0.13-fix
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup）
 # 2. 生成密钥对
 # 3. 导入密钥对
 # 4. 列出密钥对
 # 5. 验证并发送证明
-# 6. 退出
+# 6. 批量导入密钥对
+# 7. 删除密钥对
+# 8. 退出
 
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.15"
+SCRIPT_VERSION="1.0.13-fix"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 LOG_FILE="/root/soundness-script.log"
+REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
 CACHE_DIR="/root/soundness-cache"
 LANG=${LANG:-zh}
 
 # 检查 /tmp 目录状态
 check_tmp_dir() {
+    log_message "检查 /tmp 目录状态..."
     local tmp_dir="${TMPDIR:-/tmp}"
     if [ ! -d "$tmp_dir" ] || [ ! -w "$tmp_dir" ]; then
-        log_message "❌ 无法访问 $tmp_dir 目录"
-        echo "建议："
-        echo "  - 检查目录是否存在：ls -ld $tmp_dir"
-        echo "  - 检查权限：chmod 1777 $tmp_dir"
-        echo "  - 尝试使用 /var/tmp：export TMPDIR=/var/tmp"
-        exit 1
+        handle_error "无法访问 $tmp_dir 目录" "检查目录是否存在：ls -ld $tmp_dir;检查权限：chmod 1777 $tmp_dir;尝试使用 /var/tmp：export TMPDIR=/var/tmp"
     fi
     local disk_space=$(df -h "$tmp_dir" | awk 'NR==2 {print $4}' | grep -o '[0-9]\+[MG]' || echo "0")
     if [ -z "$disk_space" ] || [ "${disk_space%[MG]}" -lt 10 ]; then
-        log_message "❌ /tmp 目录空间不足"
-        echo "建议："
-        echo "  - 检查磁盘空间：df -h $tmp_dir"
-        echo "  - 清理临时文件：rm -f $tmp_dir/soundness.*"
-        exit 1
+        handle_error "/tmp 目录空间不足" "检查磁盘空间：df -h $tmp_dir;清理临时文件：rm -f $tmp_dir/soundness.*"
     fi
     log_message "✅ /tmp 目录正常：空间 $disk_space，权限 $(ls -ld "$tmp_dir")"
 }
@@ -49,6 +44,22 @@ cleanup_temp_files() {
     local tmp_dir="${TMPDIR:-/tmp}"
     find "$tmp_dir" -maxdepth 1 -name 'soundness.*' -type f -delete 2>/dev/null
     log_message "✅ 临时文件清理完成。"
+}
+
+# 检测操作系统
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$NAME
+        case $OS in
+            "Ubuntu"*) PKG_MANAGER="apt-get" ;;
+            "CentOS"*) PKG_MANAGER="yum" ;;
+            *) PKG_MANAGER="apt-get"; log_message "⚠️ 警告：不支持的操作系统 $OS，使用 apt-get" ;;
+        esac
+    else
+        PKG_MANAGER="apt-get"
+        log_message "⚠️ 警告：无法检测操作系统，使用 apt-get"
+    fi
 }
 
 # 日志记录（带行号）
@@ -71,10 +82,10 @@ handle_error() {
     exit 1
 }
 
-# 重试命令（简化版）
+# 重试命令
 retry_command() {
     local cmd=$1
-    local max_retries=3
+    local max_retries=$2
     local retry_count=0
     local output
     while [ $retry_count -lt $max_retries ]; do
@@ -125,15 +136,34 @@ validate_input() {
     fi
 }
 
+# 备份 .bashrc
+backup_bashrc() {
+    local bashrc="/root/.bashrc"
+    if [ -f "$bashrc" ]; then
+        cp "$bashrc" "$bashrc.bak-$(date +%F-%H-%M-%S)"
+        log_message "已备份 $bashrc"
+    fi
+}
+
+# 检查网络
+check_network() {
+    log_message "检查网络连接..."
+    if ! ping -c 1 raw.githubusercontent.com >/dev/null 2>&1; then
+        handle_error "无法连接到 GitHub" "检查网络：ping raw.githubusercontent.com;使用代理或 VPN"
+    fi
+    log_message "✅ 网络连接正常。"
+}
+
 # 检查依赖
 check_requirements() {
+    detect_os
     log_message "检查依赖..."
     if ! command -v curl >/dev/null 2>&1; then
-        handle_error "需要安装 curl" "安装 curl：sudo apt-get install -y curl"
+        handle_error "需要安装 curl" "安装 curl：sudo $PKG_MANAGER install -y curl"
     fi
     if ! command -v jq >/dev/null 2>&1; then
         log_message "安装 jq..."
-        sudo apt-get update && sudo apt-get install -y jq
+        sudo $PKG_MANAGER update && sudo $PKG_MANAGER install -y jq
     fi
 }
 
@@ -144,6 +174,7 @@ install_rust_cargo() {
         log_message "安装 Rust 和 Cargo..."
         retry_command "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" 3
         export PATH="$HOME/.cargo/bin:$PATH"
+        backup_bashrc
         if ! grep -q '.cargo/bin' /root/.bashrc; then
             echo "export PATH=\$HOME/.cargo/bin:\$PATH" >> /root/.bashrc
             log_message "已将 Cargo PATH 写入 /root/.bashrc"
@@ -175,6 +206,7 @@ install_soundnessup() {
 install_cli() {
     log_message "开始安装/更新 Soundness CLI..."
     check_requirements
+    check_network
     install_rust_cargo
     install_soundnessup
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
@@ -368,7 +400,7 @@ send_proof() {
         handle_error "proof-file $proof_file 无效" "检查文件是否存在或是否为有效的 Walrus Blob ID;访问 https://walruscan.io/blob/$proof_file"
     fi
     key_exists=$(retry_command "soundness-cli list-keys" 3 | grep -w "$key_name")
-    [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "使用选项 2 或 3 导入密钥对;检查名称"
+    [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "使用选项 3 或 6 导入密钥对;检查名称"
     send_command="soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
     [ -n "$normalized_payload" ] && send_command="$send_command --payload \"$normalized_payload\""
@@ -400,6 +432,92 @@ send_proof() {
     fi
 }
 
+# 批量导入密钥对
+batch_import_keys() {
+    cd "$SOUNDNESS_DIR"
+    log_message "准备批量导入密钥对..."
+    echo "请输入助记词列表（每行格式：key_name:mnemonic，完成后按 Ctrl+D）"
+    echo "或提供文本文件路径（格式同上）"
+    read -p "输入方式（1-手动输入，2-文件路径）： " input_method
+    temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
+    fi
+    password=$(cat "$temp_file")
+    rm -f "$temp_file"
+    log_message "密码长度：${#password}"
+    if [ "$input_method" = "1" ]; then
+        keys_input=$(cat)
+    elif [ "$input_method" = "2" ]; then
+        read -p "文本文件路径： " file_path
+        [ -f "$file_path" ] || handle_error "文件 $file_path 不存在" "检查文件路径"
+        keys_input=$(cat "$file_path")
+    else
+        handle_error "无效的输入方式" "选择 1 或 2"
+    fi
+    secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
+    success_count=0
+    fail_count=0
+    echo "$keys_input" | while IFS=: read -r key_name mnemonic; do
+        key_name=$(echo "$key_name" | xargs)
+        mnemonic=$(echo "$mnemonic" | xargs)
+        if [ -z "$key_name" ] || [ -z "$mnemonic" ]; then
+            log_message "⚠️ 跳过无效行：$key_name:$mnemonic"
+            ((fail_count++))
+            continue
+        fi
+        validate_input "$key_name" "密钥对名称"
+        log_message "导入密钥对：$key_name..."
+        if [ -n "$password" ]; then
+            output=$(retry_command "echo \"$password\" | soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3)
+        else
+            output=$(retry_command "soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3)
+        fi
+        if [ $? -eq 0 ]; then
+            log_message "✅ 密钥对 $key_name 导入成功！"
+            ((success_count++))
+        else
+            log_message "❌ 导入密钥对 $key_name 失败：$output"
+            ((fail_count++))
+        fi
+    done
+    log_message "🎉 批量导入完成！成功：$success_count，失败：$fail_count"
+}
+
+# 删除密钥对
+delete_key_pair() {
+    cd "$SOUNDNESS_DIR"
+    log_message "准备删除密钥对..."
+    if [ ! -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
+        handle_error "未找到 key_store.json" "没有可删除的密钥对"
+    fi
+    log_message "当前存储的密钥对："
+    temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h /tmp;检查权限：ls -l /tmp"
+    fi
+    password=$(cat "$temp_file")
+    rm -f "$temp_file"
+    log_message "密码长度：${#password}"
+    if [ -n "$password" ]; then
+        output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3)
+    else
+        output=$(retry_command "soundness-cli list-keys" 3)
+    fi
+    log_message "密钥对列表：$output"
+    read -p "请输入要删除的密钥对名称（例如 andygan）： " key_name
+    validate_input "$key_name" "密钥对名称"
+    key_exists=$(retry_command "soundness-cli list-keys" 3 | grep -w "$key_name")
+    [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "检查名称;使用选项 4 查看密钥对"
+    log_message "⚠️ 警告：删除密钥对 $key_name 不可逆！"
+    read -p "确认删除？(y/n)： " confirm
+    [ "$confirm" != "y" ] && { log_message "操作取消。"; return; }
+    jq "del(.keys.\"$key_name\")" "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" > "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json.tmp"
+    mv "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json.tmp" "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
+    chmod 600 "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
+    log_message "✅ 密钥对 $key_name 删除成功！"
+}
+
 # 显示菜单
 show_menu() {
     clear
@@ -414,8 +532,10 @@ show_menu() {
     echo "3. 导入密钥对"
     echo "4. 列出密钥对"
     echo "5. 验证并发送证明"
-    echo "6. 退出"
-    read -p "请输入选项 (1-6)： " choice
+    echo "6. 批量导入密钥对"
+    echo "7. 删除密钥对"
+    echo "8. 退出"
+    read -p "请输入选项 (1-8)： " choice
 }
 
 # 主函数
@@ -431,8 +551,10 @@ main() {
             3) import_key_pair ;;
             4) list_key_pairs ;;
             5) send_proof ;;
-            6) log_message "退出脚本。"; cleanup_temp_files; exit 0 ;;
-            *) echo "无效选项，请输入 1-6。" ;;
+            6) batch_import_keys ;;
+            7) delete_key_pair ;;
+            8) log_message "退出脚本。"; cleanup_temp_files; exit 0 ;;
+            *) echo "无效选项，请输入 1-8。" ;;
         esac
         echo ""
         read -p "按 Enter 键返回菜单..."
