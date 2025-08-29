@@ -30,6 +30,22 @@ check_rust() {
     fi
 }
 
+# 函数：确保 soundnessup 可执行
+ensure_soundnessup() {
+    if ! command -v soundnessup &> /dev/null; then
+        log_message "未找到 soundnessup，尝试手动设置 PATH..."
+        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
+        source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
+        if ! command -v soundnessup &> /dev/null; then
+            log_message "错误: 无法找到 soundnessup，请检查安装路径"
+            log_message "尝试查找 soundnessup 位置："
+            find / -name soundnessup 2>/dev/null | tee -a "$LOG_FILE"
+            exit 1
+        fi
+    fi
+    log_message "soundnessup 已可用：$(which soundnessup)"
+}
+
 # 开始脚本
 log_message "开始执行 Soundness CLI 管理脚本"
 
@@ -40,7 +56,10 @@ log_message "运行 soundnessup 安装程序..."
 curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
 check_error "soundnessup 安装程序下载或运行失败"
 log_message "更新 shell 环境..."
-source ~/.bashrc
+source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
+export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
+ensure_soundnessup
+log_message "安装 Soundness CLI..."
 soundnessup install
 check_error "Soundness CLI 安装失败"
 log_message "尝试更新 Soundness CLI 到最新版本..."
