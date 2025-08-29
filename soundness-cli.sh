@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Soundness CLI 管理脚本
+# Soundness CLI 管理脚本（Docker 版本）
 # 日志文件
 LOG_FILE="soundness_cli_script.log"
 
@@ -17,52 +17,65 @@ check_error() {
     fi
 }
 
-# 函数：检查 Rust 是否已安装
-check_rust() {
-    if ! command -v rustc &> /dev/null; then
-        log_message "Rust 未安装，正在安装 Rust..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        check_error "Rust 安装失败"
-        source $HOME/.cargo/env
-        log_message "Rust 安装成功"
+# 函数：检查 Docker 和 Docker Compose 是否已安装
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        log_message "Docker 未安装，正在安装 Docker..."
+        sudo apt-get update
+        sudo apt-get install -y docker.io docker-compose-plugin
+        sudo systemctl start docker
+        sudo systemctl enable docker
+        check_error "Docker 安装失败"
+        log_message "Docker 安装成功"
     else
-        log_message "Rust 已安装"
+        log_message "Docker 已安装：$(docker --version)"
+    fi
+    if ! docker compose version &> /dev/null; then
+        log_message "错误: Docker Compose 未安装"
+        log_message "请运行 'sudo apt-get install docker-compose-plugin' 或确保 Docker Compose 可用"
+        exit 1
+    fi
+    log_message "Docker Compose 已安装：$(docker compose version)"
+}
+
+# 函数：确保 Docker Compose 文件存在
+ensure_docker_compose_file() {
+    if [ ! -f "docker-compose.yml" ]; then
+        log_message "未找到 docker-compose.yml，正在创建默认文件..."
+        cat << EOF > docker-compose.yml
+version: '3.8'
+services:
+  soundness-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RUST_LOG=info
+EOF
+        log_message "已创建默认 docker-compose.yml"
+        if [ ! -f "Dockerfile" ]; then
+            log_message "未找到 Dockerfile，正在创建默认文件..."
+            cat << EOF > Dockerfile
+FROM rust:latest
+WORKDIR /app
+RUN git clone https://github.com/soundnesslabs/soundness-layer.git .
+RUN cargo install --path ./soundness-cli
+ENTRYPOINT ["soundness-cli"]
+EOF
+            log_message "已创建默认 Dockerfile"
+        fi
     fi
 }
 
-# 函数：确保 soundnessup 可执行
-ensure_soundnessup() {
-    if ! command -v soundnessup &> /dev/null; then
-        log_message "未找到 soundnessup，尝试手动设置 PATH..."
-        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
-        source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
-        if ! command -v soundnessup &> /dev/null; then
-            log_message "错误: 无法找到 soundnessup，请检查安装路径"
-            log_message "尝试查找 soundnessup 位置："
-            find / -name soundnessup 2>/dev/null | tee -a "$LOG_FILE"
-            exit 1
-        fi
-    fi
-    log_message "soundnessup 已可用：$(which soundnessup)"
-}
-
-# 函数：确保 soundness-cli 可执行
-ensure_soundness_cli() {
-    if ! command -v soundness-cli &> /dev/null; then
-        log_message "未找到 soundness-cli，尝试安装..."
-        ensure_soundnessup
-        log_message "运行 soundnessup install..."
-        soundnessup install
-        check_error "soundness-cli 安装失败"
-        export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
-        if ! command -v soundness-cli &> /dev/null; then
-            log_message "错误: 无法找到 soundness-cli，请检查安装路径"
-            log_message "尝试查找 soundness-cli 位置："
-            find / -name soundness-cli 2>/dev/null | tee -a "$LOG_FILE"
-            exit 1
-        fi
-    fi
-    log_message "soundness-cli 已可用：$(which soundness-cli)"
+# 函数：构建 Docker 镜像
+build_docker_image() {
+    log_message "构建 Docker 镜像..."
+    docker compose build
+    check_error "Docker 镜像构建失败"
+    log_message "Docker 镜像构建成功"
 }
 
 # 函数：从 JSON 文件提取助记词
@@ -90,30 +103,19 @@ extract_mnemonic() {
     echo "$MNEMONIC"
 }
 
-# 函数：安装/更新 Soundness CLI
+# 函数：安装/更新 Soundness CLI（Docker 方式）
 install_update_cli() {
-    log_message "步骤 1: 安装/更新 Soundness CLI"
-    check_rust
-    log_message "运行 soundnessup 安装程序..."
-    curl -sSL https://raw.githubusercontent.com/soundnesslabs/soundness-layer/main/soundnessup/install | bash
-    check_error "soundnessup 安装程序下载或运行失败"
-    log_message "更新 shell 环境..."
-    source /root/.bashrc 2>/dev/null || source /root/.bash_profile 2>/dev/null || source /root/.profile 2>/dev/null
-    export PATH=$PATH:/usr/local/bin:$HOME/.soundness/bin
-    ensure_soundnessup
-    log_message "安装 Soundness CLI..."
-    soundnessup install
-    check_error "Soundness CLI 安装失败"
-    log_message "尝试更新 Soundness CLI 到最新版本..."
-    soundnessup update
-    check_error "Soundness CLI 更新失败"
-    log_message "Soundness CLI 安装/更新完成"
+    log_message "步骤 1: 安装/更新 Soundness CLI（通过 Docker）"
+    check_docker
+    ensure_docker_compose_file
+    build_docker_image
+    log_message "Soundness CLI 安装/更新完成（Docker 镜像已准备）"
 }
 
 # 函数：生成密钥对
 generate_key_pair() {
     log_message "步骤 2: 生成密钥对"
-    ensure_soundness_cli
+    check_docker
     read -p "请输入密钥对名称（例如 my-key）: " KEY_NAME
     if [ -z "$KEY_NAME" ]; then
         KEY_NAME="my-key"
@@ -121,7 +123,7 @@ generate_key_pair() {
     fi
     log_message "生成密钥对（名称: $KEY_NAME）..."
     echo '注意: 输入密码时，屏幕不会显示任何字符（为了安全）。'
-    script -q -c "soundness-cli generate-key --name $KEY_NAME" key_info.txt
+    docker compose run --rm soundness-cli generate-key --name "$KEY_NAME" > key_info.txt
     check_error "密钥对生成失败"
     log_message "密钥对生成成功，信息已保存到 key_info.txt"
     log_message "请妥善保存 key_info.txt 中的助记词和公钥！"
@@ -130,7 +132,7 @@ generate_key_pair() {
 # 函数：导入密钥对
 import_key_pair() {
     log_message "步骤 3: 导入密钥对（通过助记词）"
-    ensure_soundness_cli
+    check_docker
     read -p "请输入要导入的密钥对名称（例如 my-key-import）: " IMPORT_KEY_NAME
     if [ -z "$IMPORT_KEY_NAME" ]; then
         IMPORT_KEY_NAME="my-key-import"
@@ -155,7 +157,7 @@ import_key_pair() {
         exit 1
     fi
     log_message "导入密钥对（名称: $IMPORT_KEY_NAME）..."
-    soundness-cli import-key --name "$IMPORT_KEY_NAME" --mnemonic "$MNEMONIC"
+    docker compose run --rm soundness-cli import-key --name "$IMPORT_KEY_NAME" --mnemonic "$MNEMONIC"
     check_error "密钥对导入失败"
     log_message "密钥对导入成功"
 }
@@ -163,8 +165,8 @@ import_key_pair() {
 # 函数：列出密钥对
 list_key_pairs() {
     log_message "步骤 4: 列出所有密钥对"
-    ensure_soundness_cli
-    soundness-cli list-keys
+    check_docker
+    docker compose run --rm soundness-cli list-keys
     check_error "列出密钥对失败"
     log_message "密钥对列表已显示"
 }
@@ -172,13 +174,13 @@ list_key_pairs() {
 # 函数：验证并发送证明
 send_proof() {
     log_message "步骤 5: 验证并发送证明"
-    ensure_soundness_cli
+    check_docker
     read -p "请输入证明文件的 Walrus Blob ID: " PROOF_BLOB_ID
     read -p "请输入游戏名称（例如 8queens 或 tictactoe）: " GAME_NAME
     read -p "请输入密钥对名称（用于发送证明）: " PROOF_KEY_NAME
     read -p "请输入 JSON 有效载荷（例如 {\"key\": \"value\"}）: " JSON_PAYLOAD
-    log_message "发送证明（Blob ID: $PROOF_BLOB_ID, 游戏: $GAME_NAME, 密钥: $PROOF_KEY_NAME）..."
-    soundness-cli send --proof-file "$PROOF_BLOB_ID" --game "$GAME_NAME" --key-name "$PROOF_KEY_NAME" --proving-system ligetron --payload "$JSON_PAYLOAD"
+    log_message "发送证明（Blob ID: $PROOF_BLOB_ID, 游戏: $GAME_NAME, 密钥: $PROOK_KEY_NAME）..."
+    docker compose run --rm soundness-cli send --proof-file "$PROOF_BLOB_ID" --game "$GAME_NAME" --key-name "$PROOF_KEY_NAME" --proving-system ligetron --payload "$JSON_PAYLOAD"
     check_error "证明发送失败"
     log_message "证明发送成功"
 }
@@ -186,7 +188,7 @@ send_proof() {
 # 函数：批量导入密钥对
 batch_import_keys() {
     log_message "步骤 6: 批量导入密钥对"
-    ensure_soundness_cli
+    check_docker
     read -p "请输入包含密钥文件的目录路径: " KEY_DIR
     if [ ! -d "$KEY_DIR" ]; then
         log_message "错误: 目录 $KEY_DIR 不存在"
@@ -206,7 +208,7 @@ batch_import_keys() {
         log_message "导入密钥文件: $key_file（名称: $KEY_NAME）"
         MNEMONIC=$(extract_mnemonic "$key_file")
         check_error "从 $key_file 提取助记词失败"
-        soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
+        docker compose run --rm soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
         check_error "导入密钥文件 $key_file 失败"
     done
     log_message "批量导入密钥对完成"
@@ -215,7 +217,7 @@ batch_import_keys() {
 # 函数：删除密钥对
 delete_key_pair() {
     log_message "步骤 7: 删除密钥对"
-    ensure_soundness_cli
+    check_docker
     read -p "请输入要删除的密钥对名称: " DELETE_KEY_NAME
     if [ -z "$DELETE_KEY_NAME" ]; then
         log_message "错误: 未提供要删除的密钥名称"
@@ -223,22 +225,23 @@ delete_key_pair() {
         exit 1
     fi
     log_message "删除密钥对（名称: $DELETE_KEY_NAME）..."
-    soundness-cli delete-key --name "$DELETE_KEY_NAME"
+    docker compose run --rm soundness-cli delete-key --name "$DELETE_KEY_NAME"
     check_error "删除密钥对失败"
     log_message "密钥对删除成功"
 }
 
-# 函数：删除 Soundness CLI
+# 函数：删除 Soundness CLI（Docker 方式）
 delete_cli() {
-    log_message "步骤 8: 删除 Soundness CLI"
-    read -p "确认删除 Soundness CLI？（输入 y 确认）: " CONFIRM
+    log_message "步骤 8: 删除 Soundness CLI（Docker 镜像和文件）"
+    read -p "确认删除 Soundness CLI 的 Docker 镜像和相关文件？（输入 y 确认）: " CONFIRM
     if [ ! "$CONFIRM" = "y" ]; then
         log_message "取消删除 Soundness CLI"
         return
     fi
-    log_message "删除 Soundness CLI..."
-    rm -f /usr/local/bin/soundness-cli
-    rm -f /usr/local/bin/soundnessup
+    log_message "删除 Docker 镜像和相关文件..."
+    docker compose down
+    docker image rm soundness-cli 2>/dev/null
+    rm -f docker-compose.yml Dockerfile
     rm -rf $HOME/.soundness
     check_error "Soundness CLI 删除失败"
     log_message "Soundness CLI 删除成功"
@@ -246,15 +249,15 @@ delete_cli() {
 
 # 主菜单
 show_menu() {
-    echo "Soundness CLI 管理菜单"
-    echo "1. 安装/更新 Soundness CLI（通过 soundnessup）"
+    echo "Soundness CLI 管理菜单（Docker 版本）"
+    echo "1. 安装/更新 Soundness CLI（通过 Docker）"
     echo "2. 生成密钥对"
     echo "3. 导入密钥对（通过助记词）"
     echo "4. 列出密钥对"
     echo "5. 验证并发送证明"
     echo "6. 批量导入密钥对"
     echo "7. 删除密钥对"
-    echo "8. 删除 Soundness CLI"
+    echo "8. 删除 Soundness CLI（Docker 镜像和文件）"
     echo "9. 退出"
     echo
 }
