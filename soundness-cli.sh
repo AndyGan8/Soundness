@@ -2,7 +2,7 @@
 clear
 
 # Soundness CLI 一键脚本（优化版）
-# 版本：1.0.8
+# 版本：1.0.9
 # 功能：
 # 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
 # 2. 生成密钥对
@@ -16,12 +16,13 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.8"
+SCRIPT_VERSION="1.0.9"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 LOG_FILE="/root/soundness-script.log"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
+CACHE_DIR="/root/soundness-cache"
 LANG=${LANG:-zh}
 
 # 检测操作系统
@@ -306,6 +307,7 @@ install_docker_cli() {
     verify_repo
     generate_docker_compose
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
+    secure_directory "$CACHE_DIR"
     log_message "更新 Soundness CLI..."
     retry_command "soundnessup update" 3
     if ! soundness-cli --help >/dev/null 2>&1; then
@@ -320,10 +322,15 @@ install_docker_cli() {
 
 # 安全输入密码
 secure_password_input() {
-    local temp_file=$(mktemp)
+    local temp_file=$(mktemp /tmp/soundness.XXXXXX)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法创建临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     read -sp "请输入密码（留空则无密码，按 Enter 确认）： " password
     echo ""
     echo "$password" > "$temp_file"
+    chmod 600 "$temp_file"
+    log_message "创建临时文件：$temp_file"
     echo "$temp_file"
 }
 
@@ -333,9 +340,12 @@ generate_key_pair() {
     read -p "请输入密钥对名称（例如 andygan）： " key_name
     validate_input "$key_name" "密钥对名称"
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
-    secure_directory "$SOUNDNESS_CONFIG_DIR"
+    secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "生成密钥对：$key_name..."
     if [ -n "$password" ]; then
         output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
@@ -355,9 +365,12 @@ generate_key_pair() {
 # 导入密钥对
 import_key_pair() {
     cd "$SOUNDNESS_DIR"
-    if [ -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
+    if [ -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         log_message "当前存储的密钥对："
         temp_file=$(secure_password_input)
+        if [ ! -f "$temp_file" ]; then
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
         if [ -n "$password" ]; then
@@ -377,9 +390,12 @@ import_key_pair() {
         handle_error "助记词不能为空" "提供有效的 24 单词助记词"
     fi
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
-    secure_directory "$SOUNDNESS_CONFIG_DIR"
+    secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "导入密钥对：$key_name..."
     if [ -n "$password" ]; then
         output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
@@ -400,8 +416,12 @@ list_key_pairs() {
     cd "$SOUNDNESS_DIR"
     log_message "列出所有存储的密钥对..."
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
         output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
@@ -421,22 +441,30 @@ send_proof() {
     cd "$SOUNDNESS_DIR"
     check_server_status
     log_message "准备发送证明..."
-    if [ ! -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
+    if [ ! -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         handle_error "未找到 key_store.json" "先生成或导入密钥对（选项 2 或 3）"
     fi
 
     # 显示当前密钥对
     log_message "当前存储的密钥对："
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
+    log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
         output=$(retry_command "cat \"$temp_file\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
     else
         output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
     fi
-    log_message "list-keys 输出：$output"
-    echo "$output"
+    if [ $? -eq 0 ]; then
+        log_message "list-keys 输出：$output"
+        echo "$output"
+    else
+        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确"
+    fi
 
     # 交互式输入参数
     echo "请输入以下参数（按提示逐项输入）："
@@ -485,36 +513,56 @@ send_proof() {
     # 检查 WASM 文件
     wasm_path=$(echo "$normalized_payload" | jq -r '.program')
     if [ -n "$wasm_path" ] && [ "$wasm_path" != "null" ] && [ ! -f "$wasm_path" ]; then
-        wasm_dir=$(dirname "$wasm_path")
-        secure_directory "$wasm_dir"
-        log_message "下载 WASM 文件 $wasm_path..."
-        wasm_urls=(
-            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.wasm"
-            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.wasm"
-        )
-        for url in "${wasm_urls[@]}"; do
-            if retry_command "curl -s -o \"$wasm_path\" \"$url\"" 3; then
-                chmod 644 "$wasm_path"
-                break
-            fi
-        done
-        [ ! -f "$wasm_path" ] && handle_error "无法下载 WASM 文件 $wasm_path" "检查网络;确认文件 URL"
+        wasm_file=$(basename "$wasm_path")
+        cached_wasm="$CACHE_DIR/$wasm_file"
+        if [ -f "$cached_wasm" ]; then
+            log_message "使用缓存的 WASM 文件：$cached_wasm"
+            cp "$cached_wasm" "$wasm_path"
+        else
+            wasm_dir=$(dirname "$wasm_path")
+            secure_directory "$wasm_dir"
+            secure_directory "$CACHE_DIR"
+            log_message "下载 WASM 文件 $wasm_path..."
+            wasm_urls=(
+                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.wasm"
+                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.wasm"
+            )
+            for url in "${wasm_urls[@]}"; do
+                if retry_command "curl -s -o \"$wasm_path\" \"$url\"" 3; then
+                    chmod 644 "$wasm_path"
+                    cp "$wasm_path" "$cached_wasm"
+                    log_message "已缓存 WASM 文件到 $cached_wasm"
+                    break
+                fi
+            done
+            [ ! -f "$wasm_path" ] && handle_error "无法下载 WASM 文件 $wasm_path" "检查网络;确认文件 URL"
+        fi
     fi
 
     # 检查 ELF 文件
     if [ -n "$elf_file" ] && [ ! -f "$elf_file" ] && ! echo "$elf_file" | grep -qE '^[A-Za-z0-9+/=-_]{20,}$'; then
-        log_message "下载 ELF 文件 $elf_file..."
-        elf_urls=(
-            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.elf"
-            "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.elf"
-        )
-        for url in "${elf_urls[@]}"; do
-            if retry_command "curl -s -o \"$elf_file\" \"$url\"" 3; then
-                chmod 644 "$elf_file"
-                break
-            fi
-        done
-        [ ! -f "$elf_file" ] && handle_error "无法下载 ELF 文件 $elf_file" "检查网络;确认文件 URL"
+        elf_file_name=$(basename "$elf_file")
+        cached_elf="$CACHE_DIR/$elf_file_name"
+        if [ -f "$cached_elf" ]; then
+            log_message "使用缓存的 ELF 文件：$cached_elf"
+            cp "$cached_elf" "$elf_file"
+        else
+            secure_directory "$CACHE_DIR"
+            log_message "下载 ELF 文件 $elf_file..."
+            elf_urls=(
+                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/examples/8queen.elf"
+                "https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/sdk/build/examples/8queen.elf"
+            )
+            for url in "${elf_urls[@]}"; do
+                if retry_command "curl -s -o \"$elf_file\" \"$url\"" 3; then
+                    chmod 644 "$elf_file"
+                    cp "$elf_file" "$cached_elf"
+                    log_message "已缓存 ELF 文件到 $cached_elf"
+                    break
+                fi
+            done
+            [ ! -f "$elf_file" ] && handle_error "无法下载 ELF 文件 $elf_file" "检查网络;确认文件 URL"
+        fi
     fi
 
     # 检查 proof 文件或 Blob ID
@@ -533,7 +581,11 @@ send_proof() {
     [ -n "$normalized_payload" ] && send_command="$send_command --payload \"$normalized_payload\""
     [ -n "$game" ] && send_command="$send_command --game \"$game\""
     if [ -n "$password" ]; then
-        send_command="echo \"$password\" | $send_command"
+        temp_file=$(secure_password_input)
+        if [ ! -f "$temp_file" ]; then
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        fi
+        send_command="cat \"$temp_file\" | $send_command"
     fi
 
     # 执行并处理响应
@@ -543,6 +595,9 @@ send_proof() {
         log_message "发送证明（尝试 $((retry_count + 1))/$max_retries）：$send_command"
         output=$(eval "$send_command" 2>&1)
         exit_code=$?
+        if [ -n "$temp_file" ]; then
+            rm -f "$temp_file"
+        fi
         if [ $exit_code -eq 0 ]; then
             log_message "✅ 证明发送成功！"
             log_message "服务器响应：$output"
@@ -582,9 +637,12 @@ send_proof() {
 batch_import_keys() {
     cd "$SOUNDNESS_DIR"
     log_message "准备批量导入密钥对..."
-    if [ -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
+    if [ -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         log_message "当前存储的密钥对："
         temp_file=$(secure_password_input)
+        if [ ! -f "$temp_file" ]; then
+            handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+        fi
         password=$(cat "$temp_file")
         rm -f "$temp_file"
         if [ -n "$password" ]; then
@@ -599,6 +657,9 @@ batch_import_keys() {
     echo "或提供文本文件路径（格式同上）"
     read -p "输入方式（1-手动输入，2-文件路径）： " input_method
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
     if [ "$input_method" = "1" ]; then
@@ -610,7 +671,7 @@ batch_import_keys() {
     else
         handle_error "无效的输入方式" "选择 1 或 2"
     fi
-    secure_directory "$SOUNDNESS_CONFIG_DIR"
+    secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     success_count=0
     fail_count=0
     echo "$keys_input" | while IFS=: read -r key_name mnemonic; do
@@ -644,11 +705,14 @@ batch_import_keys() {
 delete_key_pair() {
     cd "$SOUNDNESS_DIR"
     log_message "准备删除密钥对..."
-    if [ ! -f "$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
+    if [ ! -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ]; then
         handle_error "未找到 key_store.json" "没有可删除的密钥对"
     fi
     log_message "当前存储的密钥对："
     temp_file=$(secure_password_input)
+    if [ ! -f "$temp_file" ]; then
+        handle_error "无法访问临时密码文件" "检查磁盘空间：df -h;检查权限：ls -l /tmp"
+    fi
     password=$(cat "$temp_file")
     rm -f "$temp_file"
     if [ -n "$password" ]; then
@@ -664,7 +728,7 @@ delete_key_pair() {
     log_message "⚠️ 警告：删除密钥对 $key_name 不可逆！"
     read -p "确认删除？(y/n)： " confirm
     [ "$confirm" != "y" ] && { log_message "操作取消。"; return; }
-    jq "del(.keys.\"$key_name\")" "$SOUNDNESS_CONFIG_DIR/key_store.json" > "$SOUNDNESS_CONFIG_DIR/key_store.json.tmp"
+    jq "del(.keys.\"$key_name\")" "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" > "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json.tmp"
     mv "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json.tmp" "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
     chmod 600 "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
     log_message "✅ 密钥对 $key_name 删除成功！"
@@ -689,7 +753,7 @@ show_menu() {
     echo "当前状态："
     echo "  - Soundness CLI 版本：$(soundness-cli --version 2>/dev/null || echo '未安装')"
     echo "  - Docker 状态：$(systemctl is-active docker 2>/dev/null || echo '未运行')"
-    echo "  - 密钥对数量：$( [ -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ] && jq '.keys | length' "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" || echo 0)"
+    echo "  - 密钥对数量：$( [ -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ] && jq '.keys | length' "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" 2>/dev/null || echo 0)"
     echo "  - 脚本版本：$SCRIPT_VERSION"
     cat << EOF
 请选择操作：
