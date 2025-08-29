@@ -1,10 +1,10 @@
 #!/bin/bash
 clear
 
-# Soundness CLI 一键脚本（优化版）
-# 版本：1.0.12
+# Soundness CLI 一键脚本（无 Docker 版）
+# 版本：1.0.13
 # 功能：
-# 1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
+# 1. 安装/更新 Soundness CLI（通过 soundnessup）
 # 2. 生成密钥对
 # 3. 导入密钥对
 # 4. 列出密钥对
@@ -16,10 +16,9 @@ clear
 set -e
 
 # 常量定义
-SCRIPT_VERSION="1.0.12"
+SCRIPT_VERSION="1.0.13"
 SOUNDNESS_DIR="/root/soundness-layer/soundness-cli"
 SOUNDNESS_CONFIG_DIR=".soundness"
-DOCKER_COMPOSE_FILE="docker-compose.yml"
 LOG_FILE="/root/soundness-script.log"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/SoundnessLabs/soundness-layer/main/VERSION"
 CACHE_DIR="/root/soundness-cache"
@@ -119,7 +118,7 @@ retry_command() {
             sleep $delay
             delay=$((delay + 5))
         else
-            handle_error "命令失败：$cmd" "检查网络：ping raw.githubusercontent.com;验证命令参数;检查 Docker 服务：sudo systemctl status docker;检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
+            handle_error "命令失败：$cmd" "检查网络：ping raw.githubusercontent.com;验证命令参数;检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
         fi
     done
 }
@@ -200,12 +199,6 @@ check_requirements() {
         log_message "安装 jq..."
         sudo $PKG_MANAGER update && sudo $PKG_MANAGER install -y jq
     fi
-    if ! command -v docker >/dev/null 2>&1; then
-        log_message "警告：Docker 未安装，将在安装流程中自动安装。"
-    elif ! systemctl is-active --quiet docker; then
-        log_message "启动 Docker 服务..."
-        sudo systemctl start docker || handle_error "无法启动 Docker 服务" "检查 Docker 配置：sudo systemctl status docker"
-    fi
 }
 
 # 安装 Rust 和 Cargo
@@ -250,95 +243,24 @@ install_soundnessup() {
     log_message "✅ soundnessup 已安装：$(get_soundnessup_version)"
 }
 
-# 验证仓库完整性
-verify_repo() {
-    local repo_dir="$SOUNDNESS_DIR"
-    if [ ! -f "$repo_dir/Cargo.toml" ] || [ ! -f "$repo_dir/Dockerfile" ]; then
-        handle_error "仓库 $repo_dir 缺少必要文件" "检查网络连接;重新克隆仓库：git clone https://github.com/SoundnessLabs/soundness-layer.git"
-    fi
-    log_message "✅ 仓库验证通过。"
-}
-
-# 配置 docker-compose
-generate_docker_compose() {
-    log_message "生成 docker-compose.yml..."
-    cat > "$SOUNDNESS_DIR/$DOCKER_COMPOSE_FILE" <<EOF
-services:
-  soundness-cli:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      - $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR:/home/soundness/.soundness
-      - $PWD:/workspace
-      - /root/ligero_internal:/root/ligero_internal
-    working_dir: /workspace
-    environment:
-      - RUST_LOG=info
-    user: $(id -u):$(id -g)
-    stdin_open: true
-    tty: true
-EOF
-    if ! docker-compose -f "$SOUNDNESS_DIR/$DOCKER_COMPOSE_FILE" config >/dev/null 2>&1; then
-        handle_error "docker-compose.yml 格式无效" "检查文件内容：cat $SOUNDNESS_DIR/$DOCKER_COMPOSE_FILE;恢复备份：mv $SOUNDNESS_DIR/$DOCKER_COMPOSE_FILE.bak $SOUNDNESS_DIR/$DOCKER_COMPOSE_FILE"
-    fi
-    log_message "✅ docker-compose.yml 已生成。"
-}
-
-# 配置 ligero_internal
-setup_ligero_internal() {
-    local ligero_dir="/root/ligero_internal"
-    if [ ! -d "$ligero_dir" ]; then
-        log_message "克隆 ligero_internal 仓库..."
-        retry_command "git clone https://github.com/SoundnessLabs/ligero_internal.git $ligero_dir" 3
-        cd "$ligero_dir/sdk"
-        retry_command "make build" 3
-        cd -
-    fi
-    log_message "✅ ligero_internal 已配置。"
-}
-
 # 安装 Soundness CLI
-install_docker_cli() {
+install_cli() {
     log_message "开始安装/更新 Soundness CLI..."
     check_requirements
     check_network
     install_rust_cargo
     install_soundnessup
-    if ! command -v docker >/dev/null 2>&1; then
-        log_message "安装 Docker..."
-        retry_command "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh" 3
-        sudo systemctl start docker
-        sudo systemctl enable docker
-        rm -f get-docker.sh
-    fi
-    if ! command -v docker-compose >/dev/null 2>&1; then
-        log_message "安装 docker-compose..."
-        retry_command "sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose" 3
-        sudo chmod +x /usr/local/bin/docker-compose
-    fi
-    if [ ! -d "$SOUNDNESS_DIR" ]; then
-        log_message "克隆 Soundness CLI 仓库..."
-        retry_command "git clone https://github.com/SoundnessLabs/soundness-layer.git ${SOUNDNESS_DIR}/.." 3
-    else
-        log_message "更新 Soundness CLI 仓库..."
-        cd "${SOUNDNESS_DIR}/.."
-        retry_command "git pull origin main" 3
-        cd -
-    fi
-    cd "$SOUNDNESS_DIR"
-    verify_repo
-    generate_docker_compose
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     secure_directory "$CACHE_DIR"
+    log_message "安装 Soundness CLI..."
+    retry_command "soundnessup install" 3
+    if ! soundness-cli --help >/dev/null 2>&1; then
+        handle_error "Soundness CLI 安装失败" "检查 soundnessup 日志;验证 PATH：echo \$PATH;检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
+    fi
     log_message "更新 Soundness CLI..."
     retry_command "soundnessup update" 3
     if ! soundness-cli --help >/dev/null 2>&1; then
-        log_message "尝试重新安装 Soundness CLI..."
-        retry_command "soundnessup install" 3
-    fi
-    if ! soundness-cli --help >/dev/null 2>&1; then
-        handle_error "Soundness CLI 安装失败" "检查 soundnessup 日志;验证 Docker 服务;检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
+        handle_error "Soundness CLI 更新失败" "检查 soundnessup 日志;验证 PATH：echo \$PATH;检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json"
     fi
     log_message "✅ Soundness CLI 安装完成：$(soundness-cli --version 2>/dev/null || echo 'unknown')"
 }
@@ -377,9 +299,9 @@ generate_key_pair() {
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "生成密钥对：$key_name..."
     if [ -n "$password" ]; then
-        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
     else
-        output=$(retry_command "docker-compose run --rm -it soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
+        output=$(retry_command "soundness-cli generate-key --name \"$key_name\"" 3 2>&1)
     fi
     if [ $? -eq 0 ]; then
         log_message "✅ 密钥对 $key_name 生成成功！"
@@ -387,7 +309,7 @@ generate_key_pair() {
         echo "$output"
         log_message "请将公钥提交到 Discord #testnet-access 频道，格式：!access <your_public_key>"
     else
-        handle_error "生成密钥对失败：$key_name" "检查 Docker 日志：docker logs <container_id>;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确"
+        handle_error "生成密钥对失败：$key_name" "验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确"
     fi
 }
 
@@ -404,9 +326,9 @@ import_key_pair() {
         rm -f "$temp_file"
         log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
-            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3 2>&1)
         else
-            output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "soundness-cli list-keys" 3 2>&1)
         fi
         log_message "list-keys 输出：$output"
         echo "$output"
@@ -429,16 +351,16 @@ import_key_pair() {
     secure_directory "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR"
     log_message "导入密钥对：$key_name..."
     if [ -n "$password" ]; then
-        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
     else
-        output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+        output=$(retry_command "soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
     fi
     if [ $? -eq 0 ]; then
         log_message "✅ 密钥对 $key_name 导入成功！"
         log_message "输出：$output"
         echo "$output"
     else
-        handle_error "导入密钥对失败：$key_name" "检查助记词有效性;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确"
+        handle_error "导入密钥对失败：$key_name" "检查助记词有效性;验证 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确"
     fi
 }
 
@@ -454,16 +376,16 @@ list_key_pairs() {
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3 2>&1)
     else
-        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "soundness-cli list-keys" 3 2>&1)
     fi
     if [ $? -eq 0 ]; then
         log_message "✅ 列出密钥对成功！"
         log_message "输出：$output"
         echo "$output"
     else
-        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确"
+        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确"
     fi
 }
 
@@ -486,15 +408,15 @@ send_proof() {
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3 2>&1)
     else
-        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "soundness-cli list-keys" 3 2>&1)
     fi
     if [ $? -eq 0 ]; then
         log_message "list-keys 输出：$output"
         echo "$output"
     else
-        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;检查 Docker 日志：docker logs <container_id>;确认密码是否正确"
+        handle_error "列出密钥对失败" "检查 key_store.json：cat $SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json;确认密码是否正确"
     fi
 
     # 交互式输入参数
@@ -602,12 +524,11 @@ send_proof() {
     fi
 
     # 检查密钥是否存在
-    key_exists=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 | grep -w "$key_name")
+    key_exists=$(retry_command "soundness-cli list-keys" 3 | grep -w "$key_name")
     [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "使用选项 3 或 6 导入密钥对;检查名称"
 
     # 构造发送命令
-    setup_ligero_internal
-    send_command="docker-compose run --rm -it soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
+    send_command="soundness-cli send --proof-file=\"$proof_file\" --key-name=\"$key_name\" --proving-system=\"$proving_system\""
     [ -n "$elf_file" ] && send_command="$send_command --elf-file=\"$elf_file\""
     [ -n "$normalized_payload" ] && send_command="$send_command --payload \"$normalized_payload\""
     [ -n "$game" ] && send_command="$send_command --game \"$game\""
@@ -648,7 +569,7 @@ send_proof() {
             if echo "$output" | grep -q "409 Conflict" || echo "$output" | grep -q "Proof with hash.*has already been processed"; then
                 proof_hash=$(echo "$output" | jq -r '.message // empty' | grep -oE '[0-9a-f]{64}' || echo "unknown")
                 log_message "⚠️ 证明已提交：$output"
-                handle_error "证明已处理（哈希：$proof_hash）" "检查 Walruscan：https://walruscan.io/blob/$proof_file;获取新 proof-file（运行 'docker-compose run --rm -it soundness-cli generate-proof --game=\"8queens\" --key-name=\"$key_name\" --proving-system=\"$proving_system\"')"
+                handle_error "证明已处理（哈希：$proof_hash）" "检查 Walruscan：https://walruscan.io/blob/$proof_file;获取新 proof-file（运行 'soundness-cli generate-proof --game=\"8queens\" --key-name=\"$key_name\" --proving-system=\"$proving_system\"')"
             fi
             log_message "🎉 证明成功处理！"
             echo "$output" | jq -r '.sui_transaction_digest // empty' | grep -v '^$' && echo "交易摘要：$(echo "$output" | jq -r '.sui_transaction_digest')"
@@ -679,9 +600,9 @@ batch_import_keys() {
         rm -f "$temp_file"
         log_message "密码长度：${#password}"
         if [ -n "$password" ]; then
-            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3 2>&1)
         else
-            output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+            output=$(retry_command "soundness-cli list-keys" 3 2>&1)
         fi
         log_message "list-keys 输出：$output"
         echo "$output"
@@ -719,9 +640,9 @@ batch_import_keys() {
         validate_input "$key_name" "密钥对名称"
         log_message "导入密钥对：$key_name..."
         if [ -n "$password" ]; then
-            output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+            output=$(retry_command "echo \"$password\" | soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
         else
-            output=$(retry_command "docker-compose run --rm -it soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
+            output=$(retry_command "soundness-cli import-key --name \"$key_name\" --mnemonic \"$mnemonic\"" 3 2>&1)
         fi
         if [ $? -eq 0 ]; then
             log_message "✅ 密钥对 $key_name 导入成功！"
@@ -751,14 +672,14 @@ delete_key_pair() {
     rm -f "$temp_file"
     log_message "密码长度：${#password}"
     if [ -n "$password" ]; then
-        output=$(retry_command "echo \"$password\" | docker-compose run --rm -i soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "echo \"$password\" | soundness-cli list-keys" 3 2>&1)
     else
-        output=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 2>&1)
+        output=$(retry_command "soundness-cli list-keys" 3 2>&1)
     fi
     log_message "list-keys 输出：$output"
     read -p "请输入要删除的密钥对名称（例如 andygan）： " key_name
     validate_input "$key_name" "密钥对名称"
-    key_exists=$(retry_command "docker-compose run --rm -it soundness-cli list-keys" 3 | grep -w "$key_name")
+    key_exists=$(retry_command "soundness-cli list-keys" 3 | grep -w "$key_name")
     [ -z "$key_exists" ] && handle_error "密钥对 $key_name 不存在" "检查名称;使用选项 4 查看密钥对"
     log_message "⚠️ 警告：删除密钥对 $key_name 不可逆！"
     read -p "确认删除？(y/n)： " confirm
@@ -787,12 +708,12 @@ show_menu() {
     print_message "welcome"
     echo "当前状态："
     echo "  - Soundness CLI 版本：$(soundness-cli --version 2>/dev/null || echo '未安装')"
-    echo "  - Docker 状态：$(systemctl is-active docker 2>/dev/null || echo '未运行')"
+    echo "  - Rust 状态：$(cargo --version 2>/dev/null || echo '未安装')"
     echo "  - 密钥对数量：$( [ -f "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" ] && jq '.keys | length' "$SOUNDNESS_DIR/$SOUNDNESS_CONFIG_DIR/key_store.json" 2>/dev/null || echo 0)"
     echo "  - 脚本版本：$SCRIPT_VERSION"
     cat << EOF
 请选择操作：
-1. 安装/更新 Soundness CLI（通过 soundnessup 和 Docker）
+1. 安装/更新 Soundness CLI（通过 soundnessup）
 2. 生成新的密钥对
 3. 导入密钥对
 4. 列出密钥对
@@ -814,7 +735,7 @@ main() {
     while true; do
         show_menu
         case $choice in
-            1) install_docker_cli ;;
+            1) install_cli ;;
             2) generate_key_pair ;;
             3) import_key_pair ;;
             4) list_key_pairs ;;
