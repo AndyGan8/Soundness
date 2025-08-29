@@ -65,12 +65,30 @@ ensure_soundness_cli() {
         exit 1
     fi
     log_message "soundness-cli 已可用：$(soundness-cli --version)"
-    # 初始化 ~/.soundness 目录
+    # 初始化 ~/.soundness 目录和 key_store.json
     if [ ! -d "$HOME/.soundness" ]; then
         log_message "初始化 ~/.soundness 目录..."
         mkdir -p "$HOME/.soundness"
         check_error "无法创建 ~/.soundness 目录"
     fi
+    if [ ! -f "$HOME/.soundness/key_store.json" ]; then
+        log_message "初始化密钥存储文件 $HOME/.soundness/key_store.json..."
+        echo "{}" > "$HOME/.soundness/key_store.json"
+        check_error "无法初始化密钥存储文件"
+    fi
+}
+
+# 函数：验证助记词格式
+validate_mnemonic() {
+    local mnemonic="$1"
+    # 助记词通常为 12 或 24 个单词，空格分隔
+    local word_count=$(echo "$mnemonic" | wc -w)
+    if [ "$word_count" -ne 12 ] && [ "$word_count" -ne 24 ]; then
+        log_message "错误: 助记词格式无效（应为 12 或 24 个单词，当前为 $word_count 个）"
+        echo "助记词格式无效，应为 12 或 24 个单词，当前为 $word_count 个。"
+        exit 1
+    fi
+    echo "$mnemonic"
 }
 
 # 函数：从 JSON 文件提取助记词
@@ -95,7 +113,7 @@ extract_mnemonic() {
         log_message "错误: 无法从 $file 提取助记词，或文件格式不正确（需要包含 'mnemonic' 字段）"
         exit 1
     fi
-    echo "$MNEMONIC"
+    validate_mnemonic "$MNEMONIC"
 }
 
 # 函数：安装 Soundness CLI
@@ -130,6 +148,9 @@ update_cli() {
         exit 1
     fi
     log_message "更新 Soundness CLI 到最新版本..."
+    sudo apt-get update
+    sudo apt-get install -y pkg-config libssl-dev
+    check_error "依赖安装失败"
     soundnessup update
     check_error "Soundness CLI 更新失败"
     ensure_path
@@ -137,20 +158,10 @@ update_cli() {
     log_message "Soundness CLI 更新完成"
 }
 
-# 函数：生成密钥对并提示 Discord 提交
+# 函数：生成密钥对
 generate_key_pair() {
     log_message "步骤 3: 生成密钥对"
     ensure_soundness_cli
-    echo "生成密钥对前，请确认您是否已在 Soundness Labs Discord 获取 Onboarded 角色："
-    echo "1. 加入 Discord：https://discord.gg/soundnesslabs"
-    echo "2. 如果您有 Onboarded 角色，密钥对可能已在入职时生成，无需重新生成。"
-    echo "3. 如果您有邀请码，需生成新密钥对并在 Discord 的 #testnet-access 频道提交公钥。"
-    read -p "您是否已有 Onboarded 角色？（y/n）: " HAS_ONBOARDED
-    if [ "$HAS_ONBOARDED" = "y" ]; then
-        log_message "用户确认已有 Onboarded 角色，跳过密钥生成"
-        echo "您已有 Onboarded 角色，请使用现有密钥对（运行选项 5 列出密钥对）。"
-        return
-    fi
     read -p "请输入密钥对名称（例如 my-key）: " KEY_NAME
     if [ -z "$KEY_NAME" ]; then
         KEY_NAME="my-key"
@@ -160,19 +171,9 @@ generate_key_pair() {
     echo '注意: 输入密码时，屏幕不会显示任何字符（为了安全）。'
     script -q -c "soundness-cli generate-key --name $KEY_NAME" /root/key_info.txt
     check_error "密钥对生成失败"
-    # 提取公钥
-    PUBLIC_KEY=$(grep "Public key:" /root/key_info.txt | awk -F": " '{print $2}' | tr -d '\n')
-    if [ -z "$PUBLIC_KEY" ]; then
-        log_message "错误: 无法从 key_info.txt 提取公钥"
-        exit 1
-    fi
-    log_message "密钥对生成成功，公钥: $PUBLIC_KEY"
-    log_message "密钥信息已保存到 /root/key_info.txt"
+    log_message "密钥对生成成功，信息已保存到 /root/key_info.txt"
     echo "密钥对生成成功，信息已保存到 /root/key_info.txt"
-    echo "请妥善保存助记词（在 /root/key_info.txt 中）！"
-    echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
-    echo "  !access $PUBLIC_KEY"
-    echo "等待 ✅ 确认后，您已注册测试网访问权限。"
+    echo "请妥善保存 /root/key_info.txt 中的助记词和公钥！"
 }
 
 # 函数：导入密钥对并自动生成 JSON 文件
@@ -195,12 +196,8 @@ import_key_pair() {
         MNEMONIC=$(extract_mnemonic "$MNEMONIC_INPUT")
         check_error "从文件提取助记词失败"
     else
-        MNEMONIC="$MNEMONIC_INPUT"
-    fi
-    if [ -z "$MNEMONIC" ]; then
-        log_message "错误: 未提供有效的助记词"
-        echo "未提供助记词。请运行选项 3 生成密钥对，或提供有效的助记词。"
-        exit 1
+        MNEMONIC=$(validate_mnemonic "$MNEMONIC_INPUT")
+        check_error "助记词验证失败"
     fi
     # 自动生成 JSON 文件
     JSON_FILE="/root/key_info_${IMPORT_KEY_NAME}.json"
@@ -213,14 +210,6 @@ import_key_pair() {
     check_error "密钥对导入失败"
     log_message "密钥对导入成功"
     echo "助记词已保存到 $JSON_FILE，请妥善保存！"
-    # 显示公钥并提示 Discord 提交
-    PUBLIC_KEY=$(soundness-cli list-keys | grep "$IMPORT_KEY_NAME" | awk '{print $NF}' | tr -d '\n')
-    if [ ! -z "$PUBLIC_KEY" ]; then
-        log_message "导入的密钥对公钥: $PUBLIC_KEY"
-        echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
-        echo "  !access $PUBLIC_KEY"
-        echo "等待 ✅ 确认后，您已注册测试网访问权限。"
-    fi
 }
 
 # 函数：列出密钥对
@@ -241,14 +230,19 @@ list_key_pairs() {
 send_proof() {
     log_message "步骤 6: 验证并发送证明"
     ensure_soundness_cli
-    echo "请确保您已在 Soundness Labs Discord 的 #Soundness-Cockpit 频道赢得游戏并获取 Walrus Blob ID。"
-    echo "参考：https://soundness.xyz/testnet"
-    read -p "请输入证明文件的 Walrus Blob ID: " PROOF_BLOB_ID
+    echo "请确保您已赢得游戏并获取 Walrus Blob ID（参考：https://soundness.xyz/testnet）。"
+    read -p "请输入证明文件的 Walrus Blob ID 或本地文件路径: " PROOF_FILE
+    read -p "请输入 ELF 文件的 Walrus Blob ID 或本地文件路径（可选）: " ELF_FILE
     read -p "请输入游戏名称（例如 8queens 或 tictactoe）: " GAME_NAME
     read -p "请输入密钥对名称（用于发送证明）: " PROOF_KEY_NAME
-    read -p "请输入 JSON 有效载荷（例如 {\"key\": \"value\"}）: " JSON_PAYLOAD
-    log_message "发送证明（Blob ID: $PROOF_BLOB_ID, 游戏: $GAME_NAME, 密钥: $PROOF_KEY_NAME）..."
-    soundness-cli send --proof-file "$PROOF_BLOB_ID" --game "$GAME_NAME" --key-name "$PROOF_KEY_NAME" --proving-system ligetron --payload "$JSON_PAYLOAD"
+    read -p "请输入 JSON 有效载荷（例如 {\"key\": \"value\"}，按 Enter 跳过）: " JSON_PAYLOAD
+    JSON_PAYLOAD=${JSON_PAYLOAD:-"{}"}
+    log_message "发送证明（Proof: $PROOF_FILE, ELF: $ELF_FILE, 游戏: $GAME_NAME, 密钥: $PROOF_KEY_NAME）..."
+    CMD="soundness-cli send --proof-file \"$PROOF_FILE\" --game \"$GAME_NAME\" --key-name \"$PROOF_KEY_NAME\" --proving-system ligetron --payload \"$JSON_PAYLOAD\""
+    if [ ! -z "$ELF_FILE" ]; then
+        CMD="$CMD --elf-file \"$ELF_FILE\""
+    fi
+    eval "$CMD"
     check_error "证明发送失败"
     log_message "证明发送成功"
 }
@@ -278,14 +272,6 @@ batch_import_keys() {
         check_error "从 $key_file 提取助记词失败"
         soundness-cli import-key --name "$KEY_NAME" --mnemonic "$MNEMONIC"
         check_error "导入密钥文件 $key_file 失败"
-        # 显示公钥并提示 Discord 提交
-        PUBLIC_KEY=$(soundness-cli list-keys | grep "$KEY_NAME" | awk '{print $NF}' | tr -d '\n')
-        if [ ! -z "$PUBLIC_KEY" ]; then
-            log_message "导入的密钥对公钥: $PUBLIC_KEY"
-            echo "请在 Soundness Labs Discord 的 #testnet-access 频道提交以下命令："
-            echo "  !access $PUBLIC_KEY"
-            echo "等待 ✅ 确认后，您已注册测试网访问权限。"
-        fi
     done
     log_message "批量导入密钥对完成"
 }
@@ -327,7 +313,7 @@ show_menu() {
     echo "Soundness CLI 管理菜单"
     echo "1. 安装 Soundness CLI（通过 soundnessup）"
     echo "2. 更新 Soundness CLI"
-    echo "3. 生成密钥对并提交到 Discord"
+    echo "3. 生成密钥对"
     echo "4. 导入密钥对（通过助记词）"
     echo "5. 列出密钥对"
     echo "6. 验证并发送证明"
